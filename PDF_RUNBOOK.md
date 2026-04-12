@@ -8,9 +8,9 @@
 - the result survives reopening in compatible viewers.
 
 ## Canonical path
-1. Edit fields through [`scripts/pdf_form_editor.py`](/Users/igor/projects/pf2e_character_work/scripts/pdf_form_editor.py).
-2. For manual interactive editing, use [`scripts/pdf_form_web_editor.py`](/Users/igor/projects/pf2e_character_work/scripts/pdf_form_web_editor.py) instead of editing the PDF in-browser.
-2. Autosize text through [`scripts/pdf_form_tool.py`](/Users/igor/projects/pf2e_character_work/scripts/pdf_form_tool.py).
+1. Edit fields through [`scripts/pdf_form_editor.py`](/Users/igor/projects/pf2e_pdf_tools/scripts/pdf_form_editor.py).
+2. For manual interactive editing, use [`scripts/pdf_form_web_editor.py`](/Users/igor/projects/pf2e_pdf_tools/scripts/pdf_form_web_editor.py) instead of editing the PDF in-browser.
+3. Autosize text through [`scripts/pdf_form_tool.py`](/Users/igor/projects/pf2e_pdf_tools/scripts/pdf_form_tool.py).
 3. Verify visually in Chrome or an Acrobat-compatible viewer.
 
 ## Do not use
@@ -45,19 +45,19 @@
 
 ## Common commands
 ```bash
-python3 /Users/igor/projects/pf2e_character_work/scripts/pdf_form_tool.py /path/to/file.pdf
+python3 scripts/pdf_form_tool.py /path/to/file.pdf
 ```
 
 ```bash
-python3 /Users/igor/projects/pf2e_character_work/scripts/pdf_form_tool.py /path/to/file.pdf --watch
+python3 scripts/pdf_form_tool.py /path/to/file.pdf --watch
 ```
 
 ```bash
-python3 /Users/igor/projects/pf2e_character_work/scripts/pdf_form_tool.py --watch-dir /path/to/folder
+python3 scripts/pdf_form_tool.py --watch-dir /path/to/folder
 ```
 
 ```bash
-python3 /Users/igor/projects/pf2e_character_work/scripts/pdf_form_web_editor.py /path/to/file.pdf --open-browser
+python3 scripts/pdf_form_web_editor.py /path/to/file.pdf --open-browser
 ```
 
 ## Minimal editing example
@@ -79,6 +79,10 @@ editor.close()
 - Confirm key text fields are visible, not only present in form metadata.
 - Confirm required checkboxes render as checked.
 - If content changed materially, rerun autosize.
+
+## Local-only files
+- Keep private templates in `templates/local/`.
+- Do not commit personal filled character sheets to the public repository.
 
 ## Troubleshooting
 - If Chrome shows the text but Preview destroys it on save: the file is fine; Preview is the problem.

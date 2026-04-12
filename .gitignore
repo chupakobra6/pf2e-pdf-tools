@@ -5,3 +5,11 @@ __pycache__/
 .tmp_*
 .bak_*
 .autosized/
+
+# Personal/local PDFs that should stay off GitHub.
+yorn_pf2e_ru_lvl3.pdf
+seren_vale_pf2e_en_filled_v2.pdf
+
+# Local templates for private work.
+templates/local/*
+!templates/local/.gitkeep

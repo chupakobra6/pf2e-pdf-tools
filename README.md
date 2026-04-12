@@ -29,6 +29,10 @@ This repo keeps those layers in sync and provides a safer editing workflow.
 - `RM_CharacterSheet_Fillable.pdf`
   Canonical Pathfinder 2e fillable base used for rebuilds and repair work.
 
+- `templates/local/`
+  Private local template directory.
+  Files placed there are ignored by git and stay off GitHub.
+
 ## Why this exists
 
 Standard viewers are unreliable for this sheet:
@@ -93,6 +97,11 @@ editor.close()
 2. Edit fields through `pdf_form_editor.py` or `pdf_form_web_editor.py`.
 3. Run `pdf_form_tool.py` once after content edits.
 4. Verify visually in Chrome or an Acrobat-compatible viewer.
+
+## Local files
+
+- Put private templates in `templates/local/`.
+- Do not commit personal filled sheets to the public repository.
 
 ## Do not use
 
