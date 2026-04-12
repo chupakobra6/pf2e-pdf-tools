@@ -12,15 +12,18 @@ import fitz
 
 MIN_FONT_SIZE = 4.0
 MAX_FONT_SIZE = 36.0
-WIDTH_PADDING = 4.0
-HEIGHT_PADDING = 4.0
-LINE_HEIGHT_FACTOR = 1.15
-SINGLELINE_WIDTH_SAFETY = 0.92
-MULTILINE_WIDTH_SAFETY = 0.82
 MULTILINE_HEIGHT_THRESHOLD = 28.0
 MULTILINE_MAX_FONT_SIZE = 12.0
 DEFAULT_DA = "0 g /Helv 10 Tf"
 COMPACT_ROW_Y_TOLERANCE = 1.0
+SINGLELINE_MIN_WIDTH_PADDING = 2.0
+SINGLELINE_MAX_WIDTH_PADDING = 8.0
+SINGLELINE_HEIGHT_PADDING = 2.0
+MULTILINE_WIDTH_PADDING = 2.0
+MULTILINE_HEIGHT_PADDING = 2.0
+SINGLELINE_HEIGHT_FACTOR = 0.92
+EXPLICIT_MULTILINE_LINE_HEIGHT = 1.10
+WRAPPED_MULTILINE_LINE_HEIGHT = 1.08
 FIELD_REF_PATTERN = re.compile(r"(\d+)\s+0\s+R")
 DA_PATTERN = re.compile(
     r"^(?P<prefix>.*?)(?P<font>/\S+)\s+(?P<size>[0-9]+(?:\.[0-9]+)?)\s+Tf(?P<suffix>.*)$"
@@ -93,8 +96,18 @@ def wrapped_lines(text: str, font: fitz.Font, size: float, width: float) -> list
     return lines or [""]
 
 
-def fits_single_line(text: str, font: fitz.Font, size: float, width: float, height: float) -> bool:
-    return font.text_length(text, size) <= width and size <= height * 0.85
+def fits_single_line(
+    text: str,
+    font: fitz.Font,
+    size: float,
+    width: float,
+    height: float,
+) -> bool:
+    return font.text_length(text, size) <= width and size <= height * SINGLELINE_HEIGHT_FACTOR
+
+
+def singleline_width_padding(rect: fitz.Rect) -> float:
+    return min(SINGLELINE_MAX_WIDTH_PADDING, max(SINGLELINE_MIN_WIDTH_PADDING, rect.width * 0.08))
 
 
 def fits_multiline(text: str, font: fitz.Font, size: float, width: float, height: float) -> bool:
@@ -107,7 +120,7 @@ def fits_multiline(text: str, font: fitz.Font, size: float, width: float, height
             if font.text_length(raw_line, size) > width:
                 return False
         line_count = max(1, len(raw_lines))
-        return line_count * size * LINE_HEIGHT_FACTOR <= height
+        return line_count * size * EXPLICIT_MULTILINE_LINE_HEIGHT <= height
 
     for raw_line in raw_lines:
         for word in raw_line.split():
@@ -117,7 +130,7 @@ def fits_multiline(text: str, font: fitz.Font, size: float, width: float, height
     lines = wrapped_lines(text, font, size, width)
     if any(font.text_length(line, size) > width for line in lines):
         return False
-    return len(lines) * size * LINE_HEIGHT_FACTOR <= height
+    return len(lines) * size * WRAPPED_MULTILINE_LINE_HEIGHT <= height
 
 
 def format_font_size(size: float) -> str:
@@ -415,11 +428,15 @@ class PdfFormEditor:
 
     def compute_font_size(self, widget: fitz.Widget, text: str) -> float:
         rect = widget.rect
-        width = max(1.0, rect.width - WIDTH_PADDING)
-        height = max(1.0, rect.height - HEIGHT_PADDING)
         font = build_font(getattr(widget, "text_font", None))
-        multiline = "\n" in normalize_text(text) or rect.height >= MULTILINE_HEIGHT_THRESHOLD
-        width *= MULTILINE_WIDTH_SAFETY if multiline else SINGLELINE_WIDTH_SAFETY
+        normalized = normalize_text(text)
+        multiline = "\n" in normalized or rect.height >= MULTILINE_HEIGHT_THRESHOLD
+        if multiline:
+            width = max(1.0, rect.width - MULTILINE_WIDTH_PADDING)
+            height = max(1.0, rect.height - MULTILINE_HEIGHT_PADDING)
+        else:
+            width = max(1.0, rect.width - singleline_width_padding(rect))
+            height = max(1.0, rect.height - SINGLELINE_HEIGHT_PADDING)
 
         lower = MIN_FONT_SIZE
         upper = min(MAX_FONT_SIZE, max(lower, height))
