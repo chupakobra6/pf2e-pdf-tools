@@ -7,7 +7,7 @@
 - Autosize tooling must only change font sizes, never field values or checkboxes.
 - Test autosize changes on a temporary copy before suggesting or using them on the working PDF.
 - Use `scripts/pdf_form_editor.py` as the canonical way to edit this PDF form; it updates both visible widgets and form metadata together.
-- Use `RM_CharacterSheet_Fillable.pdf` as the canonical fillable base when rebuilding or repairing a sheet; do not treat filled copies as the source template.
+- Use `templates/RM_CharacterSheet_Fillable.pdf` as the canonical fillable base when rebuilding or repairing a sheet; do not treat filled copies as the source template.
 - Use `scripts/pdf_form_web_editor.py` for manual interactive editing; do not manually edit the PDF file itself in a browser viewer.
 - Keep personal filled sheets out of git; use ignore rules for local character files.
 - Put private user-only PDF templates in `templates/local/`; that folder must stay ignored by git.

@@ -26,7 +26,10 @@ This repo keeps those layers in sync and provides a safer editing workflow.
   Renders page images with editable text fields and checkboxes overlaid on top.
   Supports portrait upload for the built-in portrait field.
 
-- `RM_CharacterSheet_Fillable.pdf`
+- `templates/`
+  Public PDF templates and reference sheets tracked in the repository.
+
+- `templates/RM_CharacterSheet_Fillable.pdf`
   Canonical Pathfinder 2e fillable base used for rebuilds and repair work.
 
 - `templates/local/`
@@ -93,7 +96,7 @@ editor.close()
 
 ## Recommended workflow
 
-1. Start from `RM_CharacterSheet_Fillable.pdf` if you need a clean rebuild.
+1. Start from `templates/RM_CharacterSheet_Fillable.pdf` if you need a clean rebuild.
 2. Edit fields through `pdf_form_editor.py` or `pdf_form_web_editor.py`.
 3. Run `pdf_form_tool.py` once after content edits.
 4. Verify visually in Chrome or an Acrobat-compatible viewer.
@@ -102,11 +105,25 @@ editor.close()
 
 - Put private templates in `templates/local/`.
 - Do not commit personal filled sheets to the public repository.
+- `templates/local/` is also the place for one-off local variants and private character sheets.
 
 ## Do not use
 
 - macOS Preview for saving the working sheet
 - IDE PDF viewers as the source of truth for edits
+
+## Validation
+
+- Open the output in Chrome or an Acrobat-compatible viewer.
+- Confirm key text fields are visible, not only present in form metadata.
+- Confirm required checkboxes render as checked.
+- If content changed materially, rerun autosize.
+
+## Troubleshooting
+
+- If Chrome shows the text but Preview destroys it on save, the file is usually fine and Preview is the problem.
+- If an IDE viewer shows edits but the file on disk never changes, the viewer did not persist the form.
+- If text is present in metadata but not visible, run the file through `PdfFormEditor` and then autosize again.
 
 ## Project status
 
