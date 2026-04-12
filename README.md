@@ -10,7 +10,32 @@ If you update only one layer, different viewers start disagreeing. Text may look
 
 This repo keeps those layers in sync and provides a safer editing workflow.
 
-## What is here
+## At a glance
+
+- safe editing for Pathfinder 2e fillable sheets
+- one core engine for field updates, autosize, and form synchronization
+- local web UI for page-based editing
+- canonical public templates in `templates/`
+- private local files isolated in `templates/local/`
+
+## Screenshots
+
+### Visual editor
+
+<img src="docs/images/web-editor.png" alt="Visual editor screenshot" width="1000">
+
+### Rendered output
+
+<img src="docs/images/demo-sheet-page1.png" alt="Rendered PDF output" width="760">
+
+## Highlights
+
+- Keeps page widgets and `AcroForm /Fields` synchronized.
+- Autosizes text without rewriting field values or checkboxes.
+- Provides a local visual editor for direct page-based form editing.
+- Works from a canonical Pathfinder 2e fillable template.
+
+## Repository layout
 
 - `scripts/pdf_form_editor.py`
   Generic editor for fillable PDF forms.
@@ -53,6 +78,14 @@ This project gives you a controlled path:
 Requirements:
 - Python 3
 - `pymupdf` / `fitz`
+- `playwright` with a local Chromium install if you want automated UI screenshots
+
+Install Python dependencies:
+
+```bash
+python3 -m pip install --user pymupdf playwright
+python3 -m playwright install chromium
+```
 
 Run the visual editor:
 
@@ -101,11 +134,11 @@ editor.close()
 3. Run `pdf_form_tool.py` once after content edits.
 4. Verify visually in Chrome or an Acrobat-compatible viewer.
 
-## Local files
+## Public vs local files
 
-- Put private templates in `templates/local/`.
-- Do not commit personal filled sheets to the public repository.
-- `templates/local/` is also the place for one-off local variants and private character sheets.
+- Keep public templates and reference PDFs in `templates/`.
+- Keep private variants and filled sheets in `templates/local/`.
+- `templates/local/` is git-ignored by design.
 
 ## Do not use
 
