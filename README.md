@@ -1,6 +1,6 @@
 # pf2e-pdf-tools
 
-Toolkit for editing Pathfinder 2e fillable character sheet PDFs without breaking form rendering.
+Toolkit for editing fillable TTRPG character sheet PDFs without breaking form rendering.
 
 The project exists because these PDFs keep state in two places at once:
 - page widgets,
@@ -12,9 +12,10 @@ This repo keeps those layers in sync and provides a safer editing workflow.
 
 ## At a glance
 
-- safe editing for Pathfinder 2e fillable sheets
-- one core engine for field updates, autosize, and form synchronization
-- local web UI for page-based editing
+- safe editing for Pathfinder 2e and D&D 5e fillable sheets
+- one core engine for field updates, autosize, image insertion, and form synchronization
+- local web UI for page-based editing on top of rendered PDF pages
+- `uv`-managed environment with a checked-in lockfile
 - canonical public templates in `templates/`
 - private local files isolated in `templates/local/`
 
@@ -33,7 +34,26 @@ This repo keeps those layers in sync and provides a safer editing workflow.
 - Keeps page widgets and `AcroForm /Fields` synchronized.
 - Autosizes text without rewriting field values or checkboxes.
 - Provides a local visual editor for direct page-based form editing.
-- Works from a canonical Pathfinder 2e fillable template.
+- Detects image/button fields and supports uploading portraits or other artwork through the web editor.
+- Works with the canonical Pathfinder 2e base and with tracked D&D templates in `templates/`.
+
+## Template-specific notes
+
+- `templates/RM_CharacterSheet_Fillable.pdf`
+  Pathfinder 2e canonical base for rebuilds, repair work, and field-level editing.
+
+- `templates/DnD_5E_CharacterSheet_Form_Fillable_ru.pdf`
+  D&D 5e 2014 Russian sheet.
+  Supports text, checkboxes, and image/button fields.
+  Verified image slots include `CHARACTER IMAGE` and `Faction Symbol Image`.
+
+- `templates/DnD_2024_Character-Sheet-Fillable-RUS.pdf`
+  D&D 2024 Russian sheet.
+  Supports text and checkboxes through the same tooling.
+  No image/button portrait slots are currently exposed by this template, so the web editor has no image-upload target there.
+
+- Static printed text that is baked into a PDF background is not editable through the form tools.
+  The editor only changes actual fillable PDF fields and detected image/button widgets.
 
 ## Repository layout
 
@@ -49,13 +69,16 @@ This repo keeps those layers in sync and provides a safer editing workflow.
 - `scripts/pdf_form_web_editor.py`
   Local visual web editor for PDF forms.
   Renders page images with editable text fields and checkboxes overlaid on top.
-  Supports portrait upload for the built-in portrait field.
+  Supports image upload for detected PDF button/image fields.
 
 - `templates/`
   Public PDF templates and reference sheets tracked in the repository.
 
 - `templates/RM_CharacterSheet_Fillable.pdf`
   Canonical Pathfinder 2e fillable base used for rebuilds and repair work.
+
+- `templates/DnD_5E_CharacterSheet_Form_Fillable_ru.pdf`
+  Russian D&D 5e fillable sheet supported by the same editor and autosize pipeline.
 
 - `templates/local/`
   Private local template directory.
@@ -76,39 +99,63 @@ This project gives you a controlled path:
 ## Quick start
 
 Requirements:
-- Python 3
-- `pymupdf` / `fitz`
-- `playwright` with a local Chromium install if you want automated UI screenshots
+- Python `3.10+`
+- `uv`
+- Chromium via Playwright only if you want automated browser screenshots
 
-Install Python dependencies:
+First-time setup after cloning:
 
 ```bash
-python3 -m pip install --user pymupdf playwright
-python3 -m playwright install chromium
+git clone <repo-url>
+cd pf2e_pdf_tools
+uv sync
+```
+
+Create or sync the project environment:
+
+```bash
+uv sync
+```
+
+You do not need to activate `.venv` manually for normal use. Prefer `uv run ...`.
+
+Optional, only if you want automated browser screenshots:
+
+```bash
+uv sync --extra screenshots
+uv run playwright install chromium
 ```
 
 Run the visual editor:
 
 ```bash
-python3 scripts/pdf_form_web_editor.py /path/to/file.pdf --open-browser
+uv run python scripts/pdf_form_web_editor.py /path/to/file.pdf --open-browser
 ```
 
 Autosize after editing:
 
 ```bash
-python3 scripts/pdf_form_tool.py /path/to/file.pdf
+uv run python scripts/pdf_form_tool.py /path/to/file.pdf
 ```
 
 Watch one file:
 
 ```bash
-python3 scripts/pdf_form_tool.py /path/to/file.pdf --watch
+uv run python scripts/pdf_form_tool.py /path/to/file.pdf --watch
 ```
 
 Watch a directory:
 
 ```bash
-python3 scripts/pdf_form_tool.py --watch-dir /path/to/folder
+uv run python scripts/pdf_form_tool.py --watch-dir /path/to/folder
+```
+
+Open a tracked template in the web editor:
+
+```bash
+uv run python scripts/pdf_form_web_editor.py \
+  templates/DnD_5E_CharacterSheet_Form_Fillable_ru.pdf \
+  --open-browser
 ```
 
 ## Minimal API example
@@ -129,16 +176,43 @@ editor.close()
 
 ## Recommended workflow
 
-1. Start from `templates/RM_CharacterSheet_Fillable.pdf` if you need a clean rebuild.
-2. Edit fields through `pdf_form_editor.py` or `pdf_form_web_editor.py`.
-3. Run `pdf_form_tool.py` once after content edits.
-4. Verify visually in Chrome or an Acrobat-compatible viewer.
+1. Run `uv sync` after cloning the repository.
+2. Start from `templates/RM_CharacterSheet_Fillable.pdf` if you need a clean Pathfinder rebuild, or from one of the D&D templates if that is your target sheet.
+3. Copy personal working files into `templates/local/` before editing.
+4. Edit fields through `pdf_form_editor.py` or `pdf_form_web_editor.py`.
+5. Run `pdf_form_tool.py` once after content edits.
+6. Verify visually in Chrome or an Acrobat-compatible viewer.
+
+## Migrating from the old setup
+
+The repository previously documented a plain `venv` + `pip` flow. `uv` is now the canonical workflow.
+
+- Use `pyproject.toml` and `uv.lock` as the source of truth for dependencies.
+- Prefer `uv sync` over manual `pip install`.
+- Prefer `uv run ...` over activating the environment by hand.
+- When dependencies change, run `uv lock` and commit `pyproject.toml` and `uv.lock` together.
+- If you already have an older `.venv`, `uv sync` will usually reuse it. If the environment becomes inconsistent, remove `.venv` and run `uv sync` again.
+
+## Supported forms
+
+- Pathfinder 2e: canonical rebuild and repair workflow centered on `templates/RM_CharacterSheet_Fillable.pdf`.
+- D&D 5e RU: supported for text editing, autosize, and image upload through the same tools.
+- D&D 2024 RU: supported for text editing and autosize through the same tools.
+
+The editor is generic at the PDF-form level: if a PDF exposes fillable text, checkboxes, and button/image fields, the tooling can usually edit it without viewer-side corruption.
 
 ## Public vs local files
 
 - Keep public templates and reference PDFs in `templates/`.
 - Keep private variants and filled sheets in `templates/local/`.
 - `templates/local/` is git-ignored by design.
+
+## Git workflow
+
+- Commit dependency changes as a pair: `pyproject.toml` and `uv.lock`.
+- Do not commit `.venv/` or personal filled character sheets.
+- Keep public template PDFs in `templates/` only if they are meant to ship with the repository.
+- Put user-specific working copies in `templates/local/`.
 
 ## Do not use
 
@@ -150,6 +224,7 @@ editor.close()
 - Open the output in Chrome or an Acrobat-compatible viewer.
 - Confirm key text fields are visible, not only present in form metadata.
 - Confirm required checkboxes render as checked.
+- Confirm image uploads render inside the expected PDF field when the form includes image/button widgets.
 - If content changed materially, rerun autosize.
 
 ## Troubleshooting
@@ -157,8 +232,10 @@ editor.close()
 - If Chrome shows the text but Preview destroys it on save, the file is usually fine and Preview is the problem.
 - If an IDE viewer shows edits but the file on disk never changes, the viewer did not persist the form.
 - If text is present in metadata but not visible, run the file through `PdfFormEditor` and then autosize again.
+- If the web editor does not start on a fresh clone, run `uv sync` first instead of installing packages globally.
+- If a PDF has multiple image slots, the web editor lets you choose the target field before upload.
 
 ## Project status
 
 This repo is intentionally small and pragmatic. It is focused on one job:
-editing Pathfinder 2e fillable PDFs in a way that remains structurally correct across viewers.
+editing fillable character sheet PDFs in a way that remains structurally correct across viewers.

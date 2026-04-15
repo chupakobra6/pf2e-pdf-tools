@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import argparse
-import cgi
 import html
 import subprocess
 import time
 import traceback
 import urllib.parse
 from dataclasses import dataclass
+from email.parser import BytesParser
+from email.policy import default as email_policy_default
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -34,6 +35,46 @@ class AppState:
     autosize_mode: str
     scale: float
     last_message: str = ""
+
+
+@dataclass
+class ParsedForm:
+    values: dict[str, list[str]]
+    files: dict[str, bytes]
+
+    def getfirst(self, key: str, default: str = "") -> str:
+        return self.values.get(key, [default])[0]
+
+    def has(self, key: str) -> bool:
+        return key in self.values or key in self.files
+
+
+def parse_form_data(handler: BaseHTTPRequestHandler) -> ParsedForm:
+    content_type = handler.headers.get("Content-Type", "")
+    content_length = int(handler.headers.get("Content-Length", "0"))
+    payload = handler.rfile.read(content_length)
+
+    if "multipart/form-data" not in content_type:
+        parsed = urllib.parse.parse_qs(payload.decode("utf-8"), keep_blank_values=True)
+        return ParsedForm(values=parsed, files={})
+
+    message = BytesParser(policy=email_policy_default).parsebytes(
+        f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8") + payload
+    )
+    values: dict[str, list[str]] = {}
+    files: dict[str, bytes] = {}
+    for part in message.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        if not name:
+            continue
+        body = part.get_payload(decode=True) or b""
+        filename = part.get_filename()
+        if filename:
+            files[name] = body
+            continue
+        charset = part.get_content_charset() or "utf-8"
+        values.setdefault(name, []).append(body.decode(charset, errors="replace"))
+    return ParsedForm(values=values, files=files)
 
 
 def html_page(title: str, body: str) -> bytes:
@@ -344,6 +385,9 @@ def overlay_font_size(field: FieldInfo, scale: float, height: float, multiline: 
 
 
 def control_html(field: FieldInfo, scale: float) -> str:
+    if field.field_type == "Button":
+        return ""
+
     left = field.x0 * scale
     top = field.y0 * scale
     width = max(8.0, (field.x1 - field.x0) * scale)
@@ -381,6 +425,8 @@ def render_index(
     pdf_path: Path,
     pages: list[PageSpec],
     fields: list[FieldInfo],
+    image_field_names: list[str],
+    default_image_field_name: str | None,
     message: str,
     scale: float,
 ) -> bytes:
@@ -406,6 +452,23 @@ def render_index(
         )
 
     status_html = f'<div class="status">{html.escape(message)}</div>' if message else ""
+    image_controls = ""
+    if image_field_names:
+        options = "".join(
+            (
+                f'<option value="{html.escape(name)}"'
+                f'{" selected" if name == default_image_field_name else ""}>'
+                f"{html.escape(name)}</option>"
+            )
+            for name in image_field_names
+        )
+        image_controls = f"""
+            <select name="image_field_name" title="Поле изображения">
+              {options}
+            </select>
+            <input class="file-input" type="file" name="portrait_image" accept="image/*" title="Загрузить изображение">
+        """
+
     body = f"""
     <div class="wrap">
       <form id="editor-form" method="post" action="/save" enctype="multipart/form-data">
@@ -415,7 +478,7 @@ def render_index(
             <div class="meta">{html.escape(str(pdf_path))}</div>
           </div>
           <div class="actions">
-            <input class="file-input" type="file" name="portrait_image" accept="image/*" title="Загрузить портрет">
+            {image_controls}
             <button type="button" class="btn secondary" id="toggle-fields">Скрыть поля</button>
             <a class="btn secondary" href="/open-pdf">Open PDF</a>
             <button type="submit">Save To PDF</button>
@@ -478,46 +541,27 @@ def build_handler(state: AppState):
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
 
-            content_type = self.headers.get("Content-Type", "")
-            if "multipart/form-data" in content_type:
-                form = cgi.FieldStorage(
-                    fp=self.rfile,
-                    headers=self.headers,
-                    environ={
-                        "REQUEST_METHOD": "POST",
-                        "CONTENT_TYPE": content_type,
-                    },
-                )
-            else:
-                content_length = int(self.headers.get("Content-Length", "0"))
-                payload = self.rfile.read(content_length).decode("utf-8")
-                form = urllib.parse.parse_qs(payload, keep_blank_values=True)
+            form = parse_form_data(self)
             editor = PdfFormEditor(state.pdf_path)
             try:
                 started = time.time()
                 fields = editor.list_fields()
                 text_names = sorted({field.name for field in fields if field.field_type == "Text"})
                 checkbox_names = sorted({field.name for field in fields if field.field_type == "CheckBox"})
-                portrait_bytes = b""
-                if isinstance(form, cgi.FieldStorage) and "portrait_image" in form:
-                    portrait_field = form["portrait_image"]
-                    if getattr(portrait_field, "file", None):
-                        portrait_bytes = portrait_field.file.read()
+                image_field_name = form.getfirst("image_field_name") or None
+                portrait_bytes = form.files.get("portrait_image", b"")
                 print(
                     f"[pdf-web] save start file={state.pdf_path} "
                     f"text_fields={len(text_names)} checkbox_fields={len(checkbox_names)} "
-                    f"portrait={'yes' if portrait_bytes else 'no'}"
+                    f"portrait={'yes' if portrait_bytes else 'no'} "
+                    f"image_field={image_field_name or '<auto>'}"
                 )
                 for name in text_names:
-                    if isinstance(form, cgi.FieldStorage):
-                        value = form.getfirst(f"text:{name}", "")
-                    else:
-                        value = form.get(f"text:{name}", [""])[0]
-                    editor.set_text(name, value)
+                    editor.set_text(name, form.getfirst(f"text:{name}", ""))
                 for name in checkbox_names:
-                    editor.set_checkbox(name, f"check:{name}" in form)
+                    editor.set_checkbox(name, form.has(f"check:{name}"))
                 if portrait_bytes:
-                    editor.set_portrait_image(portrait_bytes)
+                    editor.set_portrait_image(portrait_bytes, field_name=image_field_name)
                 editor.autosize_text_fields(state.autosize_mode)
                 editor.save()
                 duration = time.time() - started
@@ -541,11 +585,21 @@ def build_handler(state: AppState):
             editor = PdfFormEditor(state.pdf_path)
             try:
                 fields = editor.list_fields()
+                image_field_names = editor.button_field_names()
+                default_image_field_name = editor.default_image_field_name()
             finally:
                 editor.close()
             print(f"[pdf-web] render index fields={len(fields)}")
             pages = get_page_specs(state.pdf_path)
-            content = render_index(state.pdf_path, pages, fields, state.last_message, state.scale)
+            content = render_index(
+                state.pdf_path,
+                pages,
+                fields,
+                image_field_names,
+                default_image_field_name,
+                state.last_message,
+                state.scale,
+            )
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(content)))

@@ -1,6 +1,9 @@
 # AGENTS.md
 
 ## PDF workflow
+- Use `pyproject.toml` and `uv.lock` as the dependency source of truth; do not introduce parallel `requirements.txt` instructions.
+- Bootstrap and run repo tooling through `uv` (`uv sync`, `uv run ...`) unless there is a repo-specific reason not to.
+- If dependencies change, update and commit `pyproject.toml` and `uv.lock` together.
 - Do not bulk-rewrite character sheets.
 - Preserve user manual edits by default.
 - If a PDF value must change, update only the explicitly requested fields.

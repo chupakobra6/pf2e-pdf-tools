@@ -1,0 +1,14 @@
+[project]
+name = "pf2e-pdf-tools"
+version = "0.1.0"
+description = "Utilities for editing fillable TTRPG character sheet PDFs without breaking form state."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pymupdf>=1.27.2.2",
+]
+
+[project.optional-dependencies]
+screenshots = [
+    "playwright>=1.55.0",
+]

@@ -50,6 +50,11 @@ EQUAL_FONT_GROUP_PATTERNS = (
         ),
     ),
 )
+DEFAULT_IMAGE_FIELD_CANDIDATES = (
+    "character_portrait_af_image",
+    "CHARACTER IMAGE",
+    "Faction Symbol Image",
+)
 
 
 def normalize_text(value: str | None) -> str:
@@ -376,15 +381,40 @@ class PdfFormEditor:
         for field_name, checked in values.items():
             self.set_checkbox(field_name, checked)
 
+    def button_field_names(self) -> list[str]:
+        return sorted(
+            {
+                field_name
+                for field_name, refs in self.widgets_by_name.items()
+                if any(ref.field_type == "Button" for ref in refs)
+            }
+        )
+
+    def default_image_field_name(self) -> str | None:
+        button_names = self.button_field_names()
+        if not button_names:
+            return None
+        for candidate in DEFAULT_IMAGE_FIELD_CANDIDATES:
+            if candidate in button_names:
+                return candidate
+        return button_names[0]
+
     def set_portrait_image(
         self,
         image_bytes: bytes,
-        field_name: str = "character_portrait_af_image",
+        field_name: str | None = None,
         inset: float = 2.0,
     ) -> None:
-        refs = self.widgets_by_name.get(field_name, [])
+        target_field_name = field_name or self.default_image_field_name()
+        if not target_field_name:
+            raise KeyError("No image button field found in PDF form")
+
+        refs = self.widgets_by_name.get(target_field_name, [])
         if not refs:
-            raise KeyError(f"Portrait field not found: {field_name}")
+            available = ", ".join(self.button_field_names()) or "<none>"
+            raise KeyError(
+                f"Image field not found: {target_field_name}. Available button fields: {available}"
+            )
 
         ref = refs[0]
         page = self.pages[ref.page_number]
