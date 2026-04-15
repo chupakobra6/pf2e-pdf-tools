@@ -46,10 +46,16 @@ This repo keeps those layers in sync and provides a safer editing workflow.
   D&D 5e 2014 Russian sheet.
   Supports text, checkboxes, and image/button fields.
   Verified image slots include `CHARACTER IMAGE` and `Faction Symbol Image`.
+  This localized template has mismatched internal skill field names versus the printed Russian skill labels.
+  `PdfFormEditor` now detects this template profile and remaps skill values and skill proficiency checkboxes to the visible rows automatically when you use logical D&D skill names.
 
 - `templates/DnD_2024_Character-Sheet-Fillable-RUS.pdf`
   D&D 2024 Russian sheet.
   Supports text and checkboxes through the same tooling.
+  The printed rows line up correctly, but the underlying PDF uses anonymous field ids like
+  `text_69...` and `checkbox_128...` instead of meaningful names.
+  `PdfFormEditor` now detects this template too and remaps logical D&D skill names and skill
+  proficiency checkboxes to the right raw fields automatically.
   No image/button portrait slots are currently exposed by this template, so the web editor has no image-upload target there.
 
 - Static printed text that is baked into a PDF background is not editable through the form tools.
@@ -173,6 +179,24 @@ editor.autosize_text_fields("filled")
 editor.save()
 editor.close()
 ```
+
+For the localized D&D sheets, prefer the logical skill helpers instead of raw widget names:
+
+```python
+editor.set_skill_values({
+    "Perception": "+4",
+    "Intimidation": "+2",
+    "Insight": "+4",
+})
+editor.set_skill_proficiencies({
+    "Perception": True,
+    "Intimidation": True,
+    "Insight": True,
+})
+```
+
+If you truly need the raw underlying PDF field name, prefix it with `raw:` such as `raw:Performance`
+for the 2014 sheet or `raw:text_69srmm` for the 2024 sheet.
 
 ## Recommended workflow
 

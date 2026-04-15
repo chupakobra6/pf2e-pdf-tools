@@ -56,6 +56,114 @@ DEFAULT_IMAGE_FIELD_CANDIDATES = (
     "Faction Symbol Image",
 )
 
+RAW_FIELD_PREFIX = "raw:"
+SKILL_PROFICIENCY_PREFIX = "skill_prof:"
+DND5E_2014_RU_PROFILE = "dnd5e_2014_ru_localized"
+DND2024_RU_PROFILE = "dnd2024_ru_anonymous_fields"
+DND5E_2014_RU_MARKERS = (
+    "Анализ",
+    "Внимательность",
+    "Уход за животными",
+)
+DND2024_RU_MARKERS = (
+    "ГЕРОИЧЕСКОЕ",
+    "БОЕВЫЕ ЗАГОВОРЫ",
+    "Тайная магия",
+)
+DND5E_2014_RU_SKILL_TEXT_MAP = {
+    "Acrobatics": "Acrobatics",
+    "Animal": "Survival",
+    "Arcana": "Medicine",
+    "Athletics": "Arcana",
+    "Deception": "Perception ",
+    "Deception ": "Perception ",
+    "History": "Intimidation",
+    "History ": "Intimidation",
+    "Insight": "Persuasion",
+    "Intimidation": "Insight",
+    "Investigation": "Animal",
+    "Investigation ": "Animal",
+    "Medicine": "Nature",
+    "Nature": "Performance",
+    "Perception": "Athletics",
+    "Perception ": "Athletics",
+    "Performance": "History ",
+    "Persuasion": "Stealth ",
+    "Religion": "Religion",
+    "SleightofHand": "Investigation ",
+    "Stealth": "SleightofHand",
+    "Stealth ": "SleightofHand",
+    "Survival": "Deception ",
+}
+DND5E_2014_RU_SKILL_CHECKBOX_MAP = {
+    "Acrobatics": "Check Box 23",
+    "Animal": "Check Box 40",
+    "Arcana": "Check Box 32",
+    "Athletics": "Check Box 25",
+    "Deception": "Check Box 34",
+    "History": "Check Box 30",
+    "Insight": "Check Box 36",
+    "Intimidation": "Check Box 29",
+    "Investigation": "Check Box 24",
+    "Medicine": "Check Box 33",
+    "Nature": "Check Box 35",
+    "Perception": "Check Box 26",
+    "Performance": "Check Box 28",
+    "Persuasion": "Check Box 39",
+    "Religion": "Check Box 37",
+    "SleightofHand": "Check Box 31",
+    "Stealth": "Check Box 38",
+    "Survival": "Check Box 27",
+}
+DND2024_RU_SKILL_TEXT_MAP = {
+    "Acrobatics": "text_69srmm",
+    "Animal": "text_67cr",
+    "Arcana": "text_59mfqs",
+    "Athletics": "text_61knsn",
+    "Deception": "text_76vfsc",
+    "History": "text_55nptn",
+    "Insight": "text_66djlf",
+    "Intimidation": "text_75pauh",
+    "Investigation": "text_57bjob",
+    "Medicine": "text_65hnhb",
+    "Nature": "text_56ksru",
+    "Perception": "text_63uhiv",
+    "Performance": "text_74rkfi",
+    "Persuasion": "text_77nads",
+    "Religion": "text_58zoel",
+    "SleightofHand": "text_70obrk",
+    "Stealth": "text_71pflk",
+    "Survival": "text_64odvk",
+}
+DND2024_RU_SKILL_CHECKBOX_MAP = {
+    "Acrobatics": "checkbox_128cefr",
+    "Animal": "checkbox_250mjvi",
+    "Arcana": "checkbox_124zscb",
+    "Athletics": "checkbox_126dqaq",
+    "Deception": "checkbox_254ypds",
+    "History": "checkbox_120drb",
+    "Insight": "checkbox_249voxf",
+    "Intimidation": "checkbox_253mbyq",
+    "Investigation": "checkbox_122zffm",
+    "Medicine": "checkbox_248scbg",
+    "Nature": "checkbox_121xgrv",
+    "Perception": "checkbox_246hqns",
+    "Performance": "checkbox_252naxc",
+    "Persuasion": "checkbox_255ltdr",
+    "Religion": "checkbox_123smy",
+    "SleightofHand": "checkbox_129tlov",
+    "Stealth": "checkbox_130ukqx",
+    "Survival": "checkbox_247lffe",
+}
+SKILL_TEXT_MAPS = {
+    DND5E_2014_RU_PROFILE: DND5E_2014_RU_SKILL_TEXT_MAP,
+    DND2024_RU_PROFILE: DND2024_RU_SKILL_TEXT_MAP,
+}
+SKILL_CHECKBOX_MAPS = {
+    DND5E_2014_RU_PROFILE: DND5E_2014_RU_SKILL_CHECKBOX_MAP,
+    DND2024_RU_PROFILE: DND2024_RU_SKILL_CHECKBOX_MAP,
+}
+
 
 def normalize_text(value: str | None) -> str:
     return str(value or "").replace("\r\n", "\n").replace("\r", "\n")
@@ -196,6 +304,7 @@ class PdfFormEditor:
         self.widgets_by_name: dict[str, list[WidgetRef]] = defaultdict(list)
         self.field_xrefs_by_name: dict[str, list[int]] = defaultdict(list)
         self._index_fields()
+        self.template_profile = self._detect_template_profile()
         self._set_need_appearances()
 
     def close(self) -> None:
@@ -289,6 +398,49 @@ class PdfFormEditor:
             return
         self.doc.xref_set_key(acro_xref, "NeedAppearances", "true")
 
+    def _detect_template_profile(self) -> str | None:
+        if not self.pages:
+            return None
+        first_page_text = self.pages[0].get_text("text")
+        if {"Acrobatics", "Performance", "Persuasion", "Stealth "}.issubset(
+            self.widgets_by_name
+        ) and all(marker in first_page_text for marker in DND5E_2014_RU_MARKERS):
+            return DND5E_2014_RU_PROFILE
+        if {"text_59mfqs", "text_77nads", "checkbox_255ltdr"}.issubset(
+            self.widgets_by_name
+        ) and all(marker in first_page_text for marker in DND2024_RU_MARKERS):
+            return DND2024_RU_PROFILE
+        return None
+
+    def _raw_field_name(self, field_name: str) -> str:
+        if field_name.startswith(RAW_FIELD_PREFIX):
+            return field_name[len(RAW_FIELD_PREFIX):]
+        return field_name
+
+    def _normalize_skill_name(self, skill_name: str) -> str:
+        return skill_name.rstrip()
+
+    def _resolve_text_field_name(self, field_name: str) -> str:
+        raw_field_name = self._raw_field_name(field_name)
+        skill_map = SKILL_TEXT_MAPS.get(self.template_profile or "")
+        if skill_map:
+            mapped = skill_map.get(raw_field_name)
+            if mapped:
+                return mapped
+        return raw_field_name
+
+    def _resolve_checkbox_field_name(self, field_name: str) -> str:
+        raw_field_name = self._raw_field_name(field_name)
+        if raw_field_name.startswith(SKILL_PROFICIENCY_PREFIX):
+            skill_name = raw_field_name[len(SKILL_PROFICIENCY_PREFIX):]
+            checkbox_map = SKILL_CHECKBOX_MAPS.get(self.template_profile or "")
+            mapped = None
+            if checkbox_map:
+                mapped = checkbox_map.get(self._normalize_skill_name(skill_name))
+            if mapped:
+                return mapped
+        return raw_field_name
+
     def _all_xrefs(self, field_name: str) -> list[int]:
         xrefs = {ref.xref for ref in self.widgets_by_name.get(field_name, [])}
         xrefs.update(self.field_xrefs_by_name.get(field_name, []))
@@ -352,6 +504,7 @@ class PdfFormEditor:
         return None
 
     def set_text(self, field_name: str, value: str) -> None:
+        field_name = self._resolve_text_field_name(field_name)
         text = normalize_text(value)
         for ref in self.widgets_by_name.get(field_name, []):
             if ref.field_type == "Text":
@@ -362,6 +515,7 @@ class PdfFormEditor:
             self._set_text_xref(xref, text)
 
     def set_checkbox(self, field_name: str, checked: bool) -> None:
+        field_name = self._resolve_checkbox_field_name(field_name)
         on_state = self.checkbox_on_state(field_name)
         target = on_state if checked and on_state else "Off"
 
@@ -380,6 +534,14 @@ class PdfFormEditor:
     def set_checkbox_values(self, values: dict[str, bool]) -> None:
         for field_name, checked in values.items():
             self.set_checkbox(field_name, checked)
+
+    def set_skill_values(self, values: dict[str, str]) -> None:
+        for skill_name, value in values.items():
+            self.set_text(skill_name, value)
+
+    def set_skill_proficiencies(self, values: dict[str, bool]) -> None:
+        for skill_name, checked in values.items():
+            self.set_checkbox(f"{SKILL_PROFICIENCY_PREFIX}{skill_name}", checked)
 
     def button_field_names(self) -> list[str]:
         return sorted(
@@ -599,12 +761,14 @@ class PdfFormEditor:
         return updated
 
     def field_value(self, field_name: str) -> str:
+        field_name = self._resolve_text_field_name(field_name)
         for ref in self.widgets_by_name.get(field_name, []):
             if ref.field_type == "Text":
                 return normalize_text(ref.widget.field_value)
         return ""
 
     def checkbox_checked(self, field_name: str) -> bool:
+        field_name = self._resolve_checkbox_field_name(field_name)
         for ref in self.widgets_by_name.get(field_name, []):
             if ref.field_type == "CheckBox":
                 value = str(ref.widget.field_value or "")
