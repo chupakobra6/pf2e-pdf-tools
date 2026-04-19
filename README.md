@@ -32,9 +32,11 @@ This repo keeps those layers in sync and provides a safer editing workflow.
 ## Highlights
 
 - Keeps page widgets and `AcroForm /Fields` synchronized.
+- Normalizes unsupported punctuation such as curly quotes, long dashes, and bullet glyphs to PDF-safe text before writing field values.
 - Autosizes text without rewriting field values or checkboxes.
 - Provides a local visual editor for direct page-based form editing.
 - Detects image/button fields and supports uploading portraits or other artwork through the web editor.
+- Handles image/button widgets through the toolbar upload controls instead of rendering them as page text overlays.
 - Works with the canonical Pathfinder 2e base and with tracked D&D templates in `templates/`.
 
 ## Template-specific notes
@@ -138,8 +140,17 @@ Run the visual editor:
 uv run python scripts/pdf_form_web_editor.py /path/to/file.pdf --open-browser
 ```
 
+Run the regression tests:
+
+```bash
+uv run python -m unittest discover -s tests
+```
+
 Inside the visual editor, use `Сменить PDF` to switch the open file. By default, the picker opens from `templates/local/`. You can override that root with `--picker-dir /path/to/folder`.
 The visual editor now autosizes filled text fields on every save by default. Override with `--autosize none|filled|all` if needed.
+Detected image/button fields are edited through the toolbar selector and file upload at the top of the page, not through inline text overlays.
+Press `f` to hide or show field overlays while previewing the page.
+After `Сменить PDF` or a successful save in another tab, older editor pages become stale and cannot save; reload the current file before editing further.
 
 Autosize after editing:
 
@@ -251,6 +262,7 @@ The editor is generic at the PDF-form level: if a PDF exposes fillable text, che
 - Open the output in Chrome or an Acrobat-compatible viewer.
 - Confirm key text fields are visible, not only present in form metadata.
 - Confirm required checkboxes render as checked.
+- On the localized D&D sheets, confirm logical skill updates land on the visible printed rows, not just on the raw internal field ids.
 - Confirm image uploads render inside the expected PDF field when the form includes image/button widgets.
 - If content changed materially, rerun autosize.
 

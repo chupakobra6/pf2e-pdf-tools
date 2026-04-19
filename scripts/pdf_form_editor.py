@@ -66,6 +66,9 @@ UNSUPPORTED_PDF_GLYPH_MAP = str.maketrans({
     "‑": "-",
     "‒": "-",
     "−": "-",
+    "•": "-",
+    "·": "-",
+    "●": "-",
     "«": "\"",
     "»": "\"",
     "“": "\"",
@@ -490,6 +493,8 @@ class PdfFormEditor:
 
     def _resolve_text_field_name(self, field_name: str) -> str:
         raw_field_name = self._raw_field_name(field_name)
+        if field_name.startswith(RAW_FIELD_PREFIX):
+            return raw_field_name
         skill_map = SKILL_TEXT_MAPS.get(self.template_profile or "")
         if skill_map:
             mapped = skill_map.get(raw_field_name)
@@ -499,6 +504,8 @@ class PdfFormEditor:
 
     def _resolve_checkbox_field_name(self, field_name: str) -> str:
         raw_field_name = self._raw_field_name(field_name)
+        if field_name.startswith(RAW_FIELD_PREFIX):
+            return raw_field_name
         if raw_field_name.startswith(SKILL_PROFICIENCY_PREFIX):
             skill_name = raw_field_name[len(SKILL_PROFICIENCY_PREFIX):]
             checkbox_map = SKILL_CHECKBOX_MAPS.get(self.template_profile or "")
