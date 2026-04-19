@@ -138,6 +138,9 @@ Run the visual editor:
 uv run python scripts/pdf_form_web_editor.py /path/to/file.pdf --open-browser
 ```
 
+Inside the visual editor, use `Сменить PDF` to switch the open file. By default, the picker opens from `templates/local/`. You can override that root with `--picker-dir /path/to/folder`.
+The visual editor now autosizes filled text fields on every save by default. Override with `--autosize none|filled|all` if needed.
+
 Autosize after editing:
 
 ```bash

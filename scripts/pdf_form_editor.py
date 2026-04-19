@@ -14,6 +14,7 @@ MIN_FONT_SIZE = 4.0
 MAX_FONT_SIZE = 36.0
 MULTILINE_HEIGHT_THRESHOLD = 28.0
 MULTILINE_MAX_FONT_SIZE = 12.0
+CONSERVATIVE_MULTILINE_MAX_FONT_SIZE = 11.0
 DEFAULT_DA = "0 g /Helv 10 Tf"
 COMPACT_ROW_Y_TOLERANCE = 1.0
 SINGLELINE_MIN_WIDTH_PADDING = 2.0
@@ -21,9 +22,13 @@ SINGLELINE_MAX_WIDTH_PADDING = 8.0
 SINGLELINE_HEIGHT_PADDING = 2.0
 MULTILINE_WIDTH_PADDING = 2.0
 MULTILINE_HEIGHT_PADDING = 2.0
+CONSERVATIVE_MULTILINE_WIDTH_PADDING = 4.0
+CONSERVATIVE_MULTILINE_HEIGHT_PADDING = 4.0
 SINGLELINE_HEIGHT_FACTOR = 0.92
 EXPLICIT_MULTILINE_LINE_HEIGHT = 1.10
 WRAPPED_MULTILINE_LINE_HEIGHT = 1.08
+CONSERVATIVE_EXPLICIT_MULTILINE_LINE_HEIGHT = 1.18
+CONSERVATIVE_WRAPPED_MULTILINE_LINE_HEIGHT = 1.14
 FIELD_REF_PATTERN = re.compile(r"(\d+)\s+0\s+R")
 DA_PATTERN = re.compile(
     r"^(?P<prefix>.*?)(?P<font>/\S+)\s+(?P<size>[0-9]+(?:\.[0-9]+)?)\s+Tf(?P<suffix>.*)$"
@@ -55,6 +60,23 @@ DEFAULT_IMAGE_FIELD_CANDIDATES = (
     "CHARACTER IMAGE",
     "Faction Symbol Image",
 )
+UNSUPPORTED_PDF_GLYPH_MAP = str.maketrans({
+    "—": "-",
+    "–": "-",
+    "‑": "-",
+    "‒": "-",
+    "−": "-",
+    "«": "\"",
+    "»": "\"",
+    "“": "\"",
+    "”": "\"",
+    "„": "\"",
+    "‟": "\"",
+    "’": "'",
+    "‘": "'",
+    "‚": "'",
+    "‛": "'",
+})
 
 RAW_FIELD_PREFIX = "raw:"
 SKILL_PROFICIENCY_PREFIX = "skill_prof:"
@@ -166,7 +188,12 @@ SKILL_CHECKBOX_MAPS = {
 
 
 def normalize_text(value: str | None) -> str:
-    return str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    return (
+        str(value or "")
+        .translate(UNSUPPORTED_PDF_GLYPH_MAP)
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+    )
 
 
 def build_font(font_name: str | None) -> fitz.Font:
@@ -223,7 +250,16 @@ def singleline_width_padding(rect: fitz.Rect) -> float:
     return min(SINGLELINE_MAX_WIDTH_PADDING, max(SINGLELINE_MIN_WIDTH_PADDING, rect.width * 0.08))
 
 
-def fits_multiline(text: str, font: fitz.Font, size: float, width: float, height: float) -> bool:
+def fits_multiline(
+    text: str,
+    font: fitz.Font,
+    size: float,
+    width: float,
+    height: float,
+    *,
+    explicit_line_height: float = EXPLICIT_MULTILINE_LINE_HEIGHT,
+    wrapped_line_height: float = WRAPPED_MULTILINE_LINE_HEIGHT,
+) -> bool:
     normalized = normalize_text(text)
     raw_lines = normalized.split("\n")
     explicit_linebreaks = "\n" in normalized
@@ -233,7 +269,7 @@ def fits_multiline(text: str, font: fitz.Font, size: float, width: float, height
             if font.text_length(raw_line, size) > width:
                 return False
         line_count = max(1, len(raw_lines))
-        return line_count * size * EXPLICIT_MULTILINE_LINE_HEIGHT <= height
+        return line_count * size * explicit_line_height <= height
 
     for raw_line in raw_lines:
         for word in raw_line.split():
@@ -243,7 +279,7 @@ def fits_multiline(text: str, font: fitz.Font, size: float, width: float, height
     lines = wrapped_lines(text, font, size, width)
     if any(font.text_length(line, size) > width for line in lines):
         return False
-    return len(lines) * size * WRAPPED_MULTILINE_LINE_HEIGHT <= height
+    return len(lines) * size * wrapped_line_height <= height
 
 
 def format_font_size(size: float) -> str:
@@ -267,6 +303,35 @@ def build_da(existing_da: str, size: float) -> str:
     if suffix:
         parts.append(suffix)
     return " ".join(parts)
+
+
+def image_rect_fit(container: fitz.Rect, image_width: float, image_height: float) -> fitz.Rect:
+    if image_width <= 0 or image_height <= 0:
+        return fitz.Rect(container)
+    container_width = max(1.0, container.width)
+    container_height = max(1.0, container.height)
+    scale = min(container_width / image_width, container_height / image_height)
+    draw_width = image_width * scale
+    draw_height = image_height * scale
+    x0 = container.x0 + (container_width - draw_width) / 2
+    y0 = container.y0 + (container_height - draw_height) / 2
+    return fitz.Rect(x0, y0, x0 + draw_width, y0 + draw_height)
+
+
+def image_dimensions(image_bytes: bytes) -> tuple[float, float] | None:
+    try:
+        image_doc = fitz.open(stream=image_bytes)
+    except Exception:
+        return None
+    try:
+        if len(image_doc) < 1:
+            return None
+        rect = image_doc[0].rect
+        if rect.width <= 0 or rect.height <= 0:
+            return None
+        return (rect.width, rect.height)
+    finally:
+        image_doc.close()
 
 
 @dataclass
@@ -324,9 +389,12 @@ class PdfFormEditor:
             )
             return
 
-        if self.doc.can_save_incrementally():
-            self.doc.saveIncr()
-            return
+        if self.path.exists() and self.doc.can_save_incrementally():
+            try:
+                self.doc.saveIncr()
+                return
+            except (RuntimeError, FileNotFoundError, fitz.FileDataError):
+                pass
 
         temp_fd, temp_name = tempfile.mkstemp(
             prefix=f".tmp_autosize_{self.path.stem}_",
@@ -503,6 +571,22 @@ class PdfFormEditor:
                     return match
         return None
 
+    def _should_use_conservative_multiline_layout(
+        self,
+        font: fitz.Font,
+        text: str,
+        width: float,
+        height: float,
+    ) -> bool:
+        normalized = normalize_text(text)
+        word_count = len([word for word in normalized.replace("\n", " ").split(" ") if word])
+        if "\n" in normalized:
+            return True
+        if len(normalized) >= 48 or word_count >= 7:
+            return True
+        nominal_size = min(11.0, MULTILINE_MAX_FONT_SIZE)
+        return not fits_multiline(normalized, font, nominal_size, width, height)
+
     def set_text(self, field_name: str, value: str) -> None:
         field_name = self._resolve_text_field_name(field_name)
         text = normalize_text(value)
@@ -587,8 +671,12 @@ class PdfFormEditor:
             rect.x1 - inset,
             rect.y1 - inset,
         )
+        draw_rect = fitz.Rect(target)
+        dims = image_dimensions(image_bytes)
+        if dims is not None:
+            draw_rect = image_rect_fit(target, dims[0], dims[1])
         page.draw_rect(target, color=(1, 1, 1), fill=(1, 1, 1), overlay=True)
-        page.insert_image(target, stream=image_bytes, keep_proportion=True, overlay=True)
+        page.insert_image(draw_rect, stream=image_bytes, keep_proportion=False, overlay=True)
         for widget_ref in refs:
             widget = widget_ref.widget
             widget.border_color = None
@@ -618,26 +706,69 @@ class PdfFormEditor:
             except Exception:
                 pass
 
-    def compute_font_size(self, widget: fitz.Widget, text: str) -> float:
+    def compute_font_size(
+        self,
+        widget: fitz.Widget,
+        text: str,
+        field_name: str | None = None,
+    ) -> float:
         rect = widget.rect
         font = build_font(getattr(widget, "text_font", None))
         normalized = normalize_text(text)
         multiline = "\n" in normalized or rect.height >= MULTILINE_HEIGHT_THRESHOLD
         if multiline:
-            width = max(1.0, rect.width - MULTILINE_WIDTH_PADDING)
-            height = max(1.0, rect.height - MULTILINE_HEIGHT_PADDING)
+            conservative = self._should_use_conservative_multiline_layout(
+                font,
+                normalized,
+                max(1.0, rect.width - MULTILINE_WIDTH_PADDING),
+                max(1.0, rect.height - MULTILINE_HEIGHT_PADDING),
+            )
+            width_padding = (
+                CONSERVATIVE_MULTILINE_WIDTH_PADDING
+                if conservative
+                else MULTILINE_WIDTH_PADDING
+            )
+            height_padding = (
+                CONSERVATIVE_MULTILINE_HEIGHT_PADDING
+                if conservative
+                else MULTILINE_HEIGHT_PADDING
+            )
+            width = max(1.0, rect.width - width_padding)
+            height = max(1.0, rect.height - height_padding)
         else:
+            conservative = False
             width = max(1.0, rect.width - singleline_width_padding(rect))
             height = max(1.0, rect.height - SINGLELINE_HEIGHT_PADDING)
 
         lower = MIN_FONT_SIZE
         upper = min(MAX_FONT_SIZE, max(lower, height))
         if multiline:
-            upper = min(upper, MULTILINE_MAX_FONT_SIZE)
+            upper = min(
+                upper,
+                CONSERVATIVE_MULTILINE_MAX_FONT_SIZE
+                if conservative
+                else MULTILINE_MAX_FONT_SIZE,
+            )
 
         def fits(size: float) -> bool:
             if multiline:
-                return fits_multiline(text, font, size, width, height)
+                return fits_multiline(
+                    text,
+                    font,
+                    size,
+                    width,
+                    height,
+                    explicit_line_height=(
+                        CONSERVATIVE_EXPLICIT_MULTILINE_LINE_HEIGHT
+                        if conservative
+                        else EXPLICIT_MULTILINE_LINE_HEIGHT
+                    ),
+                    wrapped_line_height=(
+                        CONSERVATIVE_WRAPPED_MULTILINE_LINE_HEIGHT
+                        if conservative
+                        else WRAPPED_MULTILINE_LINE_HEIGHT
+                    ),
+                )
             return fits_single_line(text, font, size, width, height)
 
         if not fits(lower):
@@ -665,7 +796,7 @@ class PdfFormEditor:
                 if not text:
                     continue
 
-                target_size = self.compute_font_size(text_ref.widget, text)
+                target_size = self.compute_font_size(text_ref.widget, text, field_name)
                 updated += self._apply_text_widget_font_size(text_ref, target_size)
         updated += self.normalize_compact_row_fonts()
         updated += self.normalize_equal_font_groups()

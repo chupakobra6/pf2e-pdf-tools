@@ -7,12 +7,13 @@ import subprocess
 import time
 import traceback
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from email.parser import BytesParser
 from email.policy import default as email_policy_default
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import RLock
 
 import fitz
 
@@ -32,9 +33,12 @@ class PageSpec:
 @dataclass
 class AppState:
     pdf_path: Path
+    picker_root: Path
     autosize_mode: str
     scale: float
     last_message: str = ""
+    document_revision: int = 0
+    lock: RLock = field(default_factory=RLock, repr=False)
 
 
 @dataclass
@@ -169,6 +173,41 @@ def html_page(title: str, body: str) -> bytes:
       margin-bottom: 16px;
       color: var(--muted);
       font-size: 13px;
+    }}
+    .picker-card {{
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--panel);
+      padding: 18px;
+      box-shadow: 0 8px 30px rgba(70, 48, 29, 0.08);
+    }}
+    .picker-meta {{
+      margin: 0 0 16px;
+      color: var(--muted);
+      font-size: 13px;
+      word-break: break-all;
+    }}
+    .entry-list {{
+      display: grid;
+      gap: 10px;
+    }}
+    .entry {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.72);
+    }}
+    .entry-name {{
+      font-weight: 700;
+      color: var(--ink);
+    }}
+    .entry-meta {{
+      color: var(--muted);
+      font-size: 12px;
     }}
     .pages {{
       display: grid;
@@ -323,6 +362,23 @@ def html_page(title: str, body: str) -> bytes:
   const formEl = document.getElementById('editor-form');
   const savingOverlay = document.getElementById('saving-overlay');
   const toggleFieldsBtn = document.getElementById('toggle-fields');
+  let fieldsHidden = false;
+
+  function setFieldsHidden(hidden) {{
+    fieldsHidden = hidden;
+    document.body.classList.toggle('fields-hidden', hidden);
+    if (toggleFieldsBtn) {{
+      toggleFieldsBtn.textContent = hidden ? 'Показать поля' : 'Скрыть поля';
+    }}
+  }}
+
+  function targetIsEditable(target) {{
+    if (!target) return false;
+    if (target instanceof HTMLInputElement) return true;
+    if (target instanceof HTMLTextAreaElement) return true;
+    if (target instanceof HTMLSelectElement) return true;
+    return Boolean(target.closest('[contenteditable="true"]'));
+  }}
 
   function syncPeersByName(syncName, value, checked, source) {{
     const peers = document.querySelectorAll(`[data-sync-name="${{CSS.escape(syncName)}}"]`);
@@ -351,12 +407,17 @@ def html_page(title: str, body: str) -> bytes:
   }}
 
   if (toggleFieldsBtn) {{
-    const applyState = () => {{
-      const hidden = document.body.classList.toggle('fields-hidden');
-      toggleFieldsBtn.textContent = hidden ? 'Показать поля' : 'Скрыть поля';
-    }};
-    toggleFieldsBtn.addEventListener('click', applyState);
+    toggleFieldsBtn.addEventListener('click', () => setFieldsHidden(!fieldsHidden));
   }}
+
+  document.addEventListener('keydown', (event) => {{
+    if (event.defaultPrevented) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.key.toLowerCase() !== 'f') return;
+    if (targetIsEditable(event.target)) return;
+    event.preventDefault();
+    setFieldsHidden(!fieldsHidden);
+  }});
 </script>
 </body>
 </html>""".encode("utf-8")
@@ -371,6 +432,127 @@ def get_page_specs(pdf_path: Path) -> list[PageSpec]:
         ]
     finally:
         doc.close()
+
+
+def default_picker_root() -> Path:
+    return Path(__file__).resolve().parent.parent / "templates" / "local"
+
+
+def resolve_picker_dir(root: Path, raw_dir: str | None) -> Path:
+    if not raw_dir:
+        return root
+    candidate = (root / raw_dir).resolve()
+    if root == candidate or root in candidate.parents:
+        return candidate
+    raise ValueError(f"Directory is outside picker root: {raw_dir}")
+
+
+def resolve_picker_pdf(root: Path, raw_path: str) -> Path:
+    candidate = (root / raw_path).resolve()
+    if not candidate.exists():
+        raise FileNotFoundError(raw_path)
+    if candidate.suffix.lower() != ".pdf":
+        raise ValueError(f"Not a PDF: {raw_path}")
+    if root != candidate and root not in candidate.parents:
+        raise ValueError(f"PDF is outside picker root: {raw_path}")
+    return candidate
+
+
+def render_picker(
+    picker_root: Path,
+    current_dir: Path,
+    current_pdf: Path,
+    message: str,
+) -> bytes:
+    try:
+        relative_dir = current_dir.relative_to(picker_root)
+        dir_label = "." if str(relative_dir) == "." else str(relative_dir)
+    except ValueError:
+        relative_dir = Path(".")
+        dir_label = str(current_dir)
+
+    directories = sorted(
+        [
+            entry
+            for entry in current_dir.iterdir()
+            if entry.is_dir() and not entry.name.startswith(".")
+        ],
+        key=lambda path: path.name.lower(),
+    )
+    pdf_files = sorted(
+        [
+            entry
+            for entry in current_dir.iterdir()
+            if entry.is_file() and entry.suffix.lower() == ".pdf"
+        ],
+        key=lambda path: path.name.lower(),
+    )
+
+    up_link = ""
+    if current_dir != picker_root:
+        parent = current_dir.parent.relative_to(picker_root)
+        up_query = urllib.parse.quote(str(parent))
+        up_link = (
+            f'<div class="entry"><div><div class="entry-name">..</div>'
+            f'<div class="entry-meta">На уровень выше</div></div>'
+            f'<a class="btn secondary" href="/choose-pdf?dir={up_query}">Открыть</a></div>'
+        )
+
+    entry_blocks: list[str] = []
+    if up_link:
+        entry_blocks.append(up_link)
+
+    for directory in directories:
+        rel = directory.relative_to(picker_root)
+        query = urllib.parse.quote(str(rel))
+        entry_blocks.append(
+            f'<div class="entry"><div><div class="entry-name">{html.escape(directory.name)}/</div>'
+            f'<div class="entry-meta">Папка</div></div>'
+            f'<a class="btn secondary" href="/choose-pdf?dir={query}">Открыть</a></div>'
+        )
+
+    for pdf_file in pdf_files:
+        rel = pdf_file.relative_to(picker_root)
+        query = urllib.parse.quote(str(rel))
+        is_current = pdf_file.resolve() == current_pdf.resolve()
+        meta = "Открыт сейчас" if is_current else "PDF"
+        action = "Открыт" if is_current else "Выбрать"
+        class_name = "btn secondary" if is_current else "btn"
+        entry_blocks.append(
+            f'<div class="entry"><div><div class="entry-name">{html.escape(pdf_file.name)}</div>'
+            f'<div class="entry-meta">{meta}</div></div>'
+            f'<a class="{class_name}" href="/switch-pdf?path={query}">{action}</a></div>'
+        )
+
+    if not entry_blocks:
+        entry_blocks.append(
+            '<div class="entry"><div><div class="entry-name">Нет PDF</div>'
+            '<div class="entry-meta">В этой папке нет PDF-файлов.</div></div></div>'
+        )
+
+    status_html = f'<div class="status">{html.escape(message)}</div>' if message else ""
+    body = f"""
+    <div class="wrap">
+      <div class="topbar">
+        <div>
+          <div class="title">Выбор PDF</div>
+          <div class="meta">Текущий файл: {html.escape(str(current_pdf))}</div>
+        </div>
+        <div class="actions">
+          <a class="btn secondary" href="/">Назад в редактор</a>
+        </div>
+      </div>
+      {status_html}
+      <section class="picker-card">
+        <p class="picker-meta">Корень выбора: {html.escape(str(picker_root))}</p>
+        <p class="picker-meta">Открыта папка: {html.escape(dir_label)}</p>
+        <div class="entry-list">
+          {''.join(entry_blocks)}
+        </div>
+      </section>
+    </div>
+    """
+    return html_page("Выбор PDF", body)
 
 
 def overlay_font_size(field: FieldInfo, scale: float, height: float, multiline: bool) -> float:
@@ -423,12 +605,14 @@ def control_html(field: FieldInfo, scale: float) -> str:
 
 def render_index(
     pdf_path: Path,
+    picker_root: Path,
     pages: list[PageSpec],
     fields: list[FieldInfo],
     image_field_names: list[str],
     default_image_field_name: str | None,
     message: str,
     scale: float,
+    document_revision: int,
 ) -> bytes:
     fields_by_page: dict[int, list[FieldInfo]] = {}
     for field in fields:
@@ -472,15 +656,19 @@ def render_index(
     body = f"""
     <div class="wrap">
       <form id="editor-form" method="post" action="/save" enctype="multipart/form-data">
+        <input type="hidden" name="expected_pdf_path" value="{html.escape(str(pdf_path.resolve()))}">
+        <input type="hidden" name="expected_pdf_revision" value="{document_revision}">
         <div class="topbar">
           <div>
             <div class="title">PDF Visual Editor</div>
             <div class="meta">{html.escape(str(pdf_path))}</div>
+            <div class="meta">Папка выбора PDF: {html.escape(str(picker_root))}</div>
           </div>
           <div class="actions">
             {image_controls}
             <button type="button" class="btn secondary" id="toggle-fields">Скрыть поля</button>
-            <a class="btn secondary" href="/open-pdf">Open PDF</a>
+            <a class="btn secondary" href="/choose-pdf">Сменить PDF</a>
+            <a class="btn secondary" href="/open-pdf">Открыть PDF</a>
             <button type="submit">Save To PDF</button>
           </div>
         </div>
@@ -517,17 +705,67 @@ def render_page_png(pdf_path: Path, page_number: int, scale: float) -> bytes:
 
 def build_handler(state: AppState):
     class Handler(BaseHTTPRequestHandler):
+        def _current_pdf_exists(self) -> bool:
+            with state.lock:
+                pdf_path = state.pdf_path
+            return pdf_path.exists() and pdf_path.is_file()
+
+        def _redirect(self, location: str) -> None:
+            self.send_response(HTTPStatus.SEE_OTHER)
+            self.send_header("Location", location)
+            self.end_headers()
+
+        def _missing_pdf_message(self, action: str) -> str:
+            with state.lock:
+                pdf_name = state.pdf_path.name
+            return (
+                f"Текущий PDF недоступен для действия «{action}»: "
+                f"{pdf_name}. Выберите другой файл."
+            )
+
+        def _send_picker_for_missing_pdf(self, action: str) -> None:
+            with state.lock:
+                state.last_message = self._missing_pdf_message(action)
+                picker_root = state.picker_root
+                pdf_path = state.pdf_path
+                message = state.last_message
+            content = render_picker(
+                picker_root,
+                picker_root,
+                pdf_path,
+                message,
+            )
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+
+        def _redirect_picker_for_missing_pdf(self, action: str) -> None:
+            with state.lock:
+                state.last_message = self._missing_pdf_message(action)
+            self._redirect("/choose-pdf")
+
         def do_GET(self) -> None:
             parsed = urllib.parse.urlparse(self.path)
             print(f"[pdf-web] GET {parsed.path}")
             if parsed.path == "/":
                 self._send_index()
                 return
+            if parsed.path == "/choose-pdf":
+                self._send_picker(parsed.query)
+                return
+            if parsed.path == "/switch-pdf":
+                self._switch_pdf(parsed.query)
+                return
             if parsed.path == "/open-pdf":
-                subprocess.Popen(["open", str(state.pdf_path)])
-                self.send_response(HTTPStatus.SEE_OTHER)
-                self.send_header("Location", "/")
-                self.end_headers()
+                if not self._current_pdf_exists():
+                    self._redirect_picker_for_missing_pdf("открытие PDF")
+                    return
+                with state.lock:
+                    pdf_path = state.pdf_path
+                subprocess.Popen(["open", str(pdf_path)])
+                self._redirect("/")
                 return
             if parsed.path.startswith("/page/") and parsed.path.endswith(".png"):
                 self._send_page_png(parsed.path)
@@ -542,47 +780,102 @@ def build_handler(state: AppState):
                 return
 
             form = parse_form_data(self)
-            editor = PdfFormEditor(state.pdf_path)
+            expected_pdf_path = form.getfirst("expected_pdf_path", "").strip()
+            expected_revision_raw = form.getfirst("expected_pdf_revision", "").strip()
+            editor = None
             try:
-                started = time.time()
-                fields = editor.list_fields()
-                text_names = sorted({field.name for field in fields if field.field_type == "Text"})
-                checkbox_names = sorted({field.name for field in fields if field.field_type == "CheckBox"})
-                image_field_name = form.getfirst("image_field_name") or None
-                portrait_bytes = form.files.get("portrait_image", b"")
-                print(
-                    f"[pdf-web] save start file={state.pdf_path} "
-                    f"text_fields={len(text_names)} checkbox_fields={len(checkbox_names)} "
-                    f"portrait={'yes' if portrait_bytes else 'no'} "
-                    f"image_field={image_field_name or '<auto>'}"
-                )
-                for name in text_names:
-                    editor.set_text(name, form.getfirst(f"text:{name}", ""))
-                for name in checkbox_names:
-                    editor.set_checkbox(name, form.has(f"check:{name}"))
-                if portrait_bytes:
-                    editor.set_portrait_image(portrait_bytes, field_name=image_field_name)
-                editor.autosize_text_fields(state.autosize_mode)
-                editor.save()
-                duration = time.time() - started
-                print(f"[pdf-web] save ok duration={duration:.2f}s")
-                state.last_message = f"PDF updated successfully in {duration:.2f}s."
+                with state.lock:
+                    current_pdf_path = state.pdf_path.resolve()
+                    current_revision = state.document_revision
+                    autosize_mode = state.autosize_mode
+
+                    if not current_pdf_path.exists():
+                        state.last_message = self._missing_pdf_message("сохранение")
+                        self._redirect("/choose-pdf")
+                        return
+
+                    if not expected_pdf_path or not expected_revision_raw:
+                        state.last_message = (
+                            "Сохранение отменено: страница редактора устарела. "
+                            "Перезагрузите нужный PDF и попробуйте снова."
+                        )
+                        self._redirect("/")
+                        return
+
+                    try:
+                        expected_path = Path(expected_pdf_path).resolve()
+                    except Exception:
+                        expected_path = None
+                    if expected_path is None or expected_path != current_pdf_path:
+                        state.last_message = (
+                            "Сохранение отменено: форма устарела после переключения PDF. "
+                            "Перезагрузите редактор нужного файла и попробуйте снова."
+                        )
+                        self._redirect("/")
+                        return
+
+                    try:
+                        expected_revision = int(expected_revision_raw)
+                    except ValueError:
+                        expected_revision = -1
+                    if expected_revision != current_revision:
+                        state.last_message = (
+                            "Сохранение отменено: форма устарела. "
+                            "Файл уже был переключён или изменён в другой вкладке."
+                        )
+                        self._redirect("/")
+                        return
+
+                    editor = PdfFormEditor(current_pdf_path)
+                    started = time.time()
+                    fields = editor.list_fields()
+                    text_names = sorted({field.name for field in fields if field.field_type == "Text"})
+                    checkbox_names = sorted({field.name for field in fields if field.field_type == "CheckBox"})
+                    image_field_name = form.getfirst("image_field_name") or None
+                    portrait_bytes = form.files.get("portrait_image", b"")
+                    print(
+                        f"[pdf-web] save start file={current_pdf_path} "
+                        f"text_fields={len(text_names)} checkbox_fields={len(checkbox_names)} "
+                        f"portrait={'yes' if portrait_bytes else 'no'} "
+                        f"image_field={image_field_name or '<auto>'}"
+                    )
+                    for name in text_names:
+                        editor.set_text(name, form.getfirst(f"text:{name}", ""))
+                    for name in checkbox_names:
+                        editor.set_checkbox(name, form.has(f"check:{name}"))
+                    if portrait_bytes:
+                        editor.set_portrait_image(portrait_bytes, field_name=image_field_name)
+                    editor.autosize_text_fields(autosize_mode)
+                    editor.save()
+                    duration = time.time() - started
+                    state.document_revision += 1
+                    print(f"[pdf-web] save ok duration={duration:.2f}s")
+                    state.last_message = f"PDF updated successfully in {duration:.2f}s."
             except Exception as exc:
                 print(f"[pdf-web] save failed: {exc}")
                 traceback.print_exc()
-                state.last_message = f"Save failed: {exc}"
+                with state.lock:
+                    state.last_message = f"Save failed: {exc}"
             finally:
-                editor.close()
+                if editor is not None:
+                    editor.close()
 
-            self.send_response(HTTPStatus.SEE_OTHER)
-            self.send_header("Location", "/")
-            self.end_headers()
+            self._redirect("/")
 
         def log_message(self, format: str, *args) -> None:
             return
 
         def _send_index(self) -> None:
-            editor = PdfFormEditor(state.pdf_path)
+            with state.lock:
+                pdf_path = state.pdf_path
+                picker_root = state.picker_root
+                last_message = state.last_message
+                scale = state.scale
+                document_revision = state.document_revision
+            if not pdf_path.exists():
+                self._send_picker_for_missing_pdf("открытие редактора")
+                return
+            editor = PdfFormEditor(pdf_path)
             try:
                 fields = editor.list_fields()
                 image_field_names = editor.button_field_names()
@@ -590,15 +883,17 @@ def build_handler(state: AppState):
             finally:
                 editor.close()
             print(f"[pdf-web] render index fields={len(fields)}")
-            pages = get_page_specs(state.pdf_path)
+            pages = get_page_specs(pdf_path)
             content = render_index(
-                state.pdf_path,
+                pdf_path,
+                picker_root,
                 pages,
                 fields,
                 image_field_names,
                 default_image_field_name,
-                state.last_message,
-                state.scale,
+                last_message,
+                scale,
+                document_revision,
             )
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -606,18 +901,65 @@ def build_handler(state: AppState):
             self.end_headers()
             self.wfile.write(content)
 
+        def _send_picker(self, query: str) -> None:
+            params = urllib.parse.parse_qs(query)
+            try:
+                with state.lock:
+                    picker_root = state.picker_root
+                    pdf_path = state.pdf_path
+                    last_message = state.last_message
+                current_dir = resolve_picker_dir(picker_root, params.get("dir", [""])[0] or None)
+                content = render_picker(
+                    picker_root,
+                    current_dir,
+                    pdf_path,
+                    last_message,
+                )
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+            except Exception as exc:
+                with state.lock:
+                    state.last_message = f"Не удалось открыть выбор PDF: {exc}"
+                self.send_response(HTTPStatus.SEE_OTHER)
+                self.send_header("Location", "/")
+                self.end_headers()
+
+        def _switch_pdf(self, query: str) -> None:
+            params = urllib.parse.parse_qs(query)
+            raw_path = params.get("path", [""])[0]
+            try:
+                if not raw_path:
+                    raise ValueError("PDF path is missing")
+                with state.lock:
+                    state.pdf_path = resolve_picker_pdf(state.picker_root, raw_path)
+                    state.document_revision += 1
+                    state.last_message = f"Открыт PDF: {state.pdf_path.name}"
+            except Exception as exc:
+                with state.lock:
+                    state.last_message = f"Не удалось переключить PDF: {exc}"
+            self._redirect("/")
+
         def _send_page_png(self, path: str) -> None:
+            with state.lock:
+                pdf_path = state.pdf_path
+                scale = state.scale
+            if not pdf_path.exists():
+                self.send_error(HTTPStatus.NOT_FOUND, self._missing_pdf_message("рендер страницы"))
+                return
             try:
                 page_number = int(path.removeprefix("/page/").removesuffix(".png"))
             except ValueError:
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
-            pages = get_page_specs(state.pdf_path)
+            pages = get_page_specs(pdf_path)
             if page_number < 0 or page_number >= len(pages):
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
             print(f"[pdf-web] render page png page={page_number}")
-            content = render_page_png(state.pdf_path, page_number, state.scale)
+            content = render_page_png(pdf_path, page_number, scale)
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "image/png")
             self.send_header("Content-Length", str(len(content)))
@@ -635,8 +977,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--autosize",
         choices=("none", "filled", "all"),
-        default="none",
-        help="Autosize mode applied after each save.",
+        default="filled",
+        help="Autosize mode applied after each save. Default: filled.",
     )
     parser.add_argument(
         "--scale",
@@ -649,6 +991,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Open the local editor in the default browser after startup.",
     )
+    parser.add_argument(
+        "--picker-dir",
+        type=Path,
+        default=default_picker_root(),
+        help="Root folder used by the in-app PDF picker. Default: templates/local.",
+    )
     return parser
 
 
@@ -658,8 +1006,18 @@ def main() -> int:
     pdf_path = args.input_pdf
     if not pdf_path.exists():
         parser.error(f"PDF does not exist: {pdf_path}")
+    picker_root = args.picker_dir.resolve()
+    if not picker_root.exists():
+        parser.error(f"Picker directory does not exist: {picker_root}")
+    if not picker_root.is_dir():
+        parser.error(f"Picker directory is not a folder: {picker_root}")
 
-    state = AppState(pdf_path=pdf_path, autosize_mode=args.autosize, scale=args.scale)
+    state = AppState(
+        pdf_path=pdf_path.resolve(),
+        picker_root=picker_root,
+        autosize_mode=args.autosize,
+        scale=args.scale,
+    )
     server = ThreadingHTTPServer((args.host, args.port), build_handler(state))
     url = f"http://{args.host}:{args.port}/"
     print(f"Serving PDF visual editor for {pdf_path}")
