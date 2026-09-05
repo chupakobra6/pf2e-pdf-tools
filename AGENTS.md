@@ -26,4 +26,5 @@
 - If you change final PDF delivery, run `tests/test_pdf_delivery.py` and verify its positive invariant: unchanged source; same page geometry; one opaque 300-DPI DeviceRGB image per page; no forms, fonts, selectable text, transparency, or annotations.
 
 ## Player-facing docs
-- For player-facing rules references or lore explainers in this repo, write in concise reference style: factual mechanics/lore statements first, minimal interpretation, and no mood-driven phrasing such as "по вайбу", personality framing, or speculative "reads as" language unless the user explicitly asks for that style.
+- For player-facing rules references, character mechanics, and ability descriptions in this repo, write in concise reference style: factual mechanics/lore statements first, minimal interpretation, and no mood-driven phrasing such as "по вайбу", personality framing, or speculative "reads as" language unless the user explicitly asks for that style.
+- Put a canonical rulebook citation beside every mechanical claim in chat explanations, player aids, and character-sheet ability blocks. Use the printed-page form `КИ-2024, стр. N` for D&D 2024 and add a direct local source link when the format supports links; cite the rulebook rather than treating a filled sheet as the authority.
