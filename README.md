@@ -14,6 +14,7 @@ This repo keeps those layers in sync and provides a safer editing workflow.
 
 - safe editing for Pathfinder 2e and D&D 5e fillable sheets
 - one core engine for field updates, autosize, image insertion, and form synchronization
+- one final delivery command that produces iPhone/iPad-safe image-only copies and can send them to Saved Messages
 - local web UI for page-based editing on top of rendered PDF pages
 - `uv`-managed environment with a checked-in lockfile
 - canonical public templates in `templates/`
@@ -79,6 +80,11 @@ This repo keeps those layers in sync and provides a safer editing workflow.
   Renders page images with editable text fields and checkboxes overlaid on top.
   Supports image upload for detected PDF button/image fields.
 
+- `scripts/pdf_delivery.py`
+  Canonical final step for player-facing PDFs.
+  Preserves the editable source and creates a validated 300-DPI image-only copy with no PDF forms, fonts, transparency, or annotations.
+  With `--send-saved`, sends the result to `@Pheik13` Saved Messages through the sibling Telegram Harvest helper and verifies filename, MIME type, and byte size from the sent message.
+
 - `templates/`
   Public PDF templates and reference sheets tracked in the repository.
 
@@ -102,7 +108,8 @@ Standard viewers are unreliable for this sheet:
 This project gives you a controlled path:
 1. edit with the provided tools,
 2. autosize once,
-3. verify in Chrome or an Acrobat-compatible viewer.
+3. verify the editable source,
+4. prepare the iPhone/iPad delivery copy and optionally send it through Telegram Harvest.
 
 ## Quick start
 
@@ -157,6 +164,23 @@ Autosize after editing:
 ```bash
 uv run python scripts/pdf_form_tool.py /path/to/file.pdf
 ```
+
+Prepare the final iPhone/iPad copy while preserving the editable source:
+
+```bash
+uv run python scripts/pdf_delivery.py /path/to/final-character-sheet.pdf
+```
+
+Prepare several finished PDFs and send the resulting copies to `@Pheik13` Saved Messages:
+
+```bash
+uv run python scripts/pdf_delivery.py \
+  /path/to/character-sheet.pdf \
+  /path/to/player-reference.pdf \
+  --send-saved
+```
+
+The command writes underscore-safe `*_iPhone_iPad.pdf` files into an `iphone-ipad/` directory beside each source. Its fixed delivery profile is 300 DPI and JPEG quality 92. It fails unless every output page is one opaque DeviceRGB image covering the original page, with the same geometry and no forms, fonts, selectable text, transparency, or annotations. Telegram delivery is considered complete only after the helper reads the sent message back and confirms the exact filename, `application/pdf` MIME type, and byte size.
 
 Watch one file:
 
@@ -219,7 +243,8 @@ for the 2014 sheet or `raw:text_69srmm` for the 2024 sheet.
 3. Copy personal working files into `templates/local/` before editing.
 4. Edit fields through `pdf_form_editor.py` or `pdf_form_web_editor.py`.
 5. Run `pdf_form_tool.py` once after content edits.
-6. Verify visually in Chrome or an Acrobat-compatible viewer.
+6. Verify the editable source visually in Chrome or an Acrobat-compatible viewer.
+7. Run `pdf_delivery.py` on the final sheet and any player reference. Deliver its `*_iPhone_iPad.pdf` outputs by default; keep the editable forms as working originals.
 
 ## Migrating from the old setup
 
@@ -265,6 +290,7 @@ The editor is generic at the PDF-form level: if a PDF exposes fillable text, che
 - On the localized D&D sheets, confirm logical skill updates land on the visible printed rows, not just on the raw internal field ids.
 - Confirm image uploads render inside the expected PDF field when the form includes image/button widgets.
 - If content changed materially, rerun autosize.
+- Run `pdf_delivery.py` before handing off a player-facing character sheet. Its structural checks prevent the viewer-dependent missing-glyph failure caused by non-embedded or custom-encoded PDF fonts.
 
 ## Troubleshooting
 

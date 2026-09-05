@@ -16,11 +16,14 @@
 - Keep personal filled sheets out of git; use ignore rules for local character files.
 - Put private user-only PDF templates in `templates/local/`; that folder must stay ignored by git.
 - After content edits, run `scripts/pdf_form_tool.py` to autosize text fields.
+- After creating or materially editing a player-facing character sheet, use `scripts/pdf_delivery.py` as the canonical final step. It preserves the editable source, creates a validated 300-DPI image-only `*_iPhone_iPad.pdf`, and can send it with `--send-saved` through Telegram Harvest.
+- Deliver the iPhone/iPad copy by default; send the editable form only when the user explicitly asks for an editable PDF.
 - Do not save this Pathfinder sheet through macOS Preview; it can destroy or flatten form data.
 - Do not rely on the Cursor PDF viewer to persist form edits; treat it as view-only for this project.
 - Use Chrome or an Acrobat-compatible viewer for visual verification of filled sheets.
 - If you change D&D template detection, logical skill remapping, image-slot detection, glyph normalization, or web-editor file-switch / stale-save handling, run `uv run python -m unittest discover -s tests`.
 - If you change web-editor image uploads or button/image widget handling, verify the real `multipart/form-data` `/save` path and ensure those widgets do not render as page text overlays.
+- If you change final PDF delivery, run `tests/test_pdf_delivery.py` and verify its positive invariant: unchanged source; same page geometry; one opaque 300-DPI DeviceRGB image per page; no forms, fonts, selectable text, transparency, or annotations.
 
 ## Player-facing docs
 - For player-facing rules references or lore explainers in this repo, write in concise reference style: factual mechanics/lore statements first, minimal interpretation, and no mood-driven phrasing such as "по вайбу", personality framing, or speculative "reads as" language unless the user explicitly asks for that style.
