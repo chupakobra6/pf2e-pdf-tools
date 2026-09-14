@@ -1,30 +1,28 @@
-# AGENTS.md
+# PDF-формы и редактор
 
-## PDF workflow
-- Use `pyproject.toml` and `uv.lock` as the dependency source of truth; do not introduce parallel `requirements.txt` instructions.
-- Bootstrap and run repo tooling through `uv` (`uv sync`, `uv run ...`) unless there is a repo-specific reason not to.
-- If dependencies change, update and commit `pyproject.toml` and `uv.lock` together.
-- Do not bulk-rewrite character sheets.
-- Preserve user manual edits by default.
-- If a PDF value must change, update only the explicitly requested fields.
-- Autosize tooling must only change font sizes, never field values or checkboxes.
-- Test autosize changes on a temporary copy before suggesting or using them on the working PDF.
-- Use `scripts/pdf_form_editor.py` as the canonical way to edit this PDF form; it updates both visible widgets and form metadata together.
-- On the localized D&D sheets, prefer `set_skill_values` and `set_skill_proficiencies` over raw widget names; use `raw:` only for debugging or one-off inspection.
-- Use `templates/RM_CharacterSheet_Fillable.pdf` as the canonical fillable base when rebuilding or repairing a sheet; do not treat filled copies as the source template.
-- Use `scripts/pdf_form_web_editor.py` for manual interactive editing; do not manually edit the PDF file itself in a browser viewer.
-- Keep personal filled sheets out of git; use ignore rules for local character files.
-- Put private user-only PDF templates in `templates/local/`; that folder must stay ignored by git.
-- After content edits, run `scripts/pdf_form_tool.py` to autosize text fields.
-- After creating or materially editing a player-facing character sheet, use `scripts/pdf_delivery.py` as the canonical final step. It preserves the editable source, creates a validated 300-DPI image-only `*_iPhone_iPad.pdf`, and can send it with `--send-saved` through Telegram Harvest.
-- Deliver the iPhone/iPad copy by default; send the editable form only when the user explicitly asks for an editable PDF.
-- Do not save this Pathfinder sheet through macOS Preview; it can destroy or flatten form data.
-- Do not rely on the Cursor PDF viewer to persist form edits; treat it as view-only for this project.
-- Use Chrome or an Acrobat-compatible viewer for visual verification of filled sheets.
-- If you change D&D template detection, logical skill remapping, image-slot detection, glyph normalization, or web-editor file-switch / stale-save handling, run `uv run python -m unittest discover -s tests`.
-- If you change web-editor image uploads or button/image widget handling, verify the real `multipart/form-data` `/save` path and ensure those widgets do not render as page text overlays.
-- If you change final PDF delivery, run `tests/test_pdf_delivery.py` and verify its positive invariant: unchanged source; same page geometry; one opaque 300-DPI DeviceRGB image per page; no forms, fonts, selectable text, transparency, or annotations.
+## Рабочие команды
 
-## Player-facing docs
-- For player-facing rules references, character mechanics, and ability descriptions in this repo, write in concise reference style: factual mechanics/lore statements first, minimal interpretation, and no mood-driven phrasing such as "по вайбу", personality framing, or speculative "reads as" language unless the user explicitly asks for that style.
-- Put a canonical rulebook citation beside every mechanical claim in chat explanations, player aids, and character-sheet ability blocks. Use the printed-page form `КИ-2024, стр. N` for D&D 2024 and add a direct local source link when the format supports links; cite the rulebook rather than treating a filled sheet as the authority.
+- Источник зависимостей — `pyproject.toml` и `uv.lock`; устанавливать и запускать через `uv sync` и `uv run ...`. При изменении зависимостей обновлять оба файла вместе. Дополнительный формат установки нужен только при конкретной причине проекта.
+- Формы изменять через `scripts/pdf_form_editor.py`: он согласованно обновляет видимые widgets и метаданные. В локализованных D&D-листах использовать `set_skill_values` и `set_skill_proficiencies`; `raw:` оставлять для диагностики или разовой проверки.
+- При пересборке или восстановлении брать заполняемый оригинал `templates/RM_CharacterSheet_Fillable.pdf`. Заполненный лист не заменяет исходный шаблон. После изменения содержимого запускать `scripts/pdf_form_tool.py` для подбора размера текста.
+- Для ручного редактирования использовать `scripts/pdf_form_web_editor.py`. Браузерный просмотрщик и Cursor использовать для просмотра; проверять внешний вид в Chrome или Acrobat-совместимом просмотрщике. Pathfinder-лист не сохранять через macOS Preview: он может разрушить или свести в изображение данные формы.
+
+## Сохранность и доставка
+
+- Сохранять ручные правки пользователя и менять только заказанные поля. Массовая перезапись листов требует отдельного поручения. Подбор размера шрифта меняет только размеры, сохраняя значения и флажки; сначала проверять его на временной копии.
+- Личные заполненные листы исключать из Git, приватные шаблоны хранить в игнорируемом `templates/local/`.
+- После создания или существенного изменения листа завершать через `scripts/pdf_delivery.py`. Он сохраняет редактируемый оригинал и создаёт проверенную копию `*_iPhone_iPad.pdf` из изображений 300 DPI; `--send-saved` использует общий Telegram Harvest.
+- По умолчанию передавать копию для iPhone/iPad; редактируемую форму — по явной просьбе.
+
+## Проверка изменений
+
+- После изменения инструментов формы проверять **два результата**: чтением полей подтвердить значения и свойства формы, рендером — вид страниц. Одна проверка не подтверждает другую.
+- При изменениях состояния редактора проверять открытие, переключение и сохранение файлов, включая удалённый/отсутствующий файл и попытку записать устаревшую версию. Запоздавшая операция должна сохранять актуальное состояние пользователя.
+- При изменении определения D&D-шаблона, сопоставления навыков, поиска image slots, нормализации glyphs или переключения файлов/stale-save запускать `uv run python -m unittest discover -s tests`.
+- При изменении загрузки изображений или button/image widgets проверять реальный `multipart/form-data` путь `/save` и отсутствие наложения текста этих widgets на страницу.
+- При изменении финальной доставки запускать `tests/test_pdf_delivery.py`: исходник неизменен, геометрия страниц сохранена, на каждой странице одно непрозрачное изображение DeviceRGB 300 DPI; в копии нет форм, шрифтов, выделяемого текста, прозрачности и annotations.
+
+## Материалы для игрока
+
+- Механики, способности и справочные материалы писать предметно: сначала факты правил и мира, затем нужное объяснение. Образные оценки и предположения о характере добавлять по просьбе пользователя.
+- Возле механического утверждения в объяснении, памятке или блоке способностей ставить ссылку на каноническую книгу; для D&D 2024 — `КИ-2024, стр. N` с печатным номером и прямой локальной ссылкой, если формат позволяет. Заполненный лист не заменяет источник правил.
