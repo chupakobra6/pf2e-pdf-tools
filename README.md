@@ -246,9 +246,9 @@ for the 2014 sheet or `raw:text_69srmm` for the 2024 sheet.
 6. Verify the editable source visually in Chrome or an Acrobat-compatible viewer.
 7. Run `pdf_delivery.py` on the final sheet and any player reference. Deliver its `*_iPhone_iPad.pdf` outputs by default; keep the editable forms as working originals.
 
-## Migrating from the old setup
+## Зависимости
 
-The repository previously documented a plain `venv` + `pip` flow. `uv` is now the canonical workflow.
+Канонический способ установки и запуска — `uv`; настройки среды находятся в `pyproject.toml` и `uv.lock`.
 
 - Use `pyproject.toml` and `uv.lock` as the source of truth for dependencies.
 - Prefer `uv sync` over manual `pip install`.
@@ -291,6 +291,12 @@ The editor is generic at the PDF-form level: if a PDF exposes fillable text, che
 - Confirm image uploads render inside the expected PDF field when the form includes image/button widgets.
 - If content changed materially, rerun autosize.
 - Run `pdf_delivery.py` before handing off a player-facing character sheet. Its structural checks prevent the viewer-dependent missing-glyph failure caused by non-embedded or custom-encoded PDF fonts.
+
+## Границы защиты от перезаписи
+
+Путь и `document_revision` защищают от старой вкладки после переключения PDF или сохранения в том же сервере редактора. Эта ревизия хранится в памяти: внешнее изменение файла другим приложением или вторым сервером её не обновляет. При таком параллельном редактировании старую форму нужно заново открыть перед сохранением; общей проверки версии файла у `PdfFormEditor.save` пока нет.
+
+Экспорт проверяет формат копии до публикации, но повторный хеш исходника сравнивает уже после замены целевого файла. Если исходник изменился во время подготовки, команда вернёт ошибку, хотя прежняя копия уже заменена. Проверку пригодности исходника требуется включить в подготовку до публикации; пока экспортируй из файла, который не меняется во время операции. Эти ограничения не отменяют сохранения редактируемого оригинала и проверки готовой копии.
 
 ## Troubleshooting
 
