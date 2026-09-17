@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import base64
+import html
+import json
+import re
 import http.client
 import shutil
 import sys
@@ -24,6 +28,12 @@ from scripts.pdf_form_web_editor import AppState, build_handler  # noqa: E402
 
 
 class PdfFormWebEditorTests(unittest.TestCase):
+    def _form_tokens(self, server: ThreadingHTTPServer) -> dict[str, str]:
+        status, _, payload = self._request(server, "GET", "/")
+        self.assertEqual(status, 200)
+        return {name: html.unescape(value) for name, value in re.findall(
+            r'name="(expected_[^"]+)" value="([^"]*)"', payload.decode())}
+
     def _make_pdf(self, path: Path) -> None:
         doc = fitz.open()
         doc.new_page()
@@ -152,8 +162,8 @@ class PdfFormWebEditorTests(unittest.TestCase):
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
 
-            self.assertEqual(status, 303)
-            self.assertEqual(headers.get("Location"), "/")
+            self.assertEqual(status, 409)
+            self.assertNotIn("Location", headers)
             self.assertIn("форма устарела", state.last_message)
             self.assertEqual(state.document_revision, 0)
 
@@ -201,8 +211,7 @@ class PdfFormWebEditorTests(unittest.TestCase):
             image_bytes = (ROOT / "docs" / "images" / "demo-sheet-page1.png").read_bytes()
             body, content_type = self._multipart_body(
                 fields={
-                    "expected_pdf_path": str(pdf_path.resolve()),
-                    "expected_pdf_revision": "0",
+                    **self._form_tokens(server),
                     "text:CharacterName": "Web Smoke",
                     "image_field_name": "CHARACTER IMAGE",
                 },
@@ -233,6 +242,72 @@ class PdfFormWebEditorTests(unittest.TestCase):
 
             after_png = self._render_page_png(pdf_path, image_page_number)
             self.assertNotEqual(before_png, after_png)
+
+    def test_synthetic_multipart_save_preserves_values_and_renders_changed_text(self) -> None:
+        from test_pdf_file_state import make_pdf
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            pdf = root / "sheet.pdf"
+            make_pdf(pdf)
+            before = self._render_page_png(pdf, 0)
+            server, _ = self._start_server(AppState(pdf, root, "filled", 1.0))
+            body, content_type = self._multipart_body({
+                **self._form_tokens(server), "text:Name": "HTTP manual edit", "check:Ready": "on",
+            }, {})
+            status, _, _ = self._request(server, "POST", "/save", body, {"Content-Type": content_type})
+            self.assertEqual(status, 303)
+            saved = PdfFormEditor(pdf)
+            self.addCleanup(saved.close)
+            self.assertEqual(saved.field_value("Name"), "HTTP manual edit")
+            self.assertTrue(saved.checkbox_checked("Ready"))
+            self.assertNotEqual(before, self._render_page_png(pdf, 0))
+
+    def test_external_changes_and_restart_keep_submitted_multipart_draft(self) -> None:
+        for conflict in ("external", "replace", "delete", "restart", "switch", "other_tab"):
+            with self.subTest(conflict=conflict), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                pdf = root / "sheet.pdf"
+                self._make_pdf(pdf)
+                state = AppState(pdf.resolve(), root.resolve(), "filled", 1.0)
+                server, _ = self._start_server(state)
+                tokens = self._form_tokens(server)
+                if conflict == "external":
+                    with fitz.open(pdf) as doc:
+                        doc[0].insert_text((30, 30), "External edit")
+                        doc.saveIncr()
+                elif conflict == "replace":
+                    other = root / "other.pdf"
+                    self._make_pdf(other)
+                    other.replace(pdf)
+                elif conflict == "delete":
+                    pdf.unlink()
+                elif conflict == "restart":
+                    server, _ = self._start_server(AppState(pdf.resolve(), root.resolve(), "filled", 1.0))
+                elif conflict == "switch":
+                    other = root / "other.pdf"
+                    self._make_pdf(other)
+                    self._request(server, "GET", "/switch-pdf?path=other.pdf")
+                elif conflict == "other_tab":
+                    first, content_type = self._multipart_body(tokens, {})
+                    status, _, _ = self._request(server, "POST", "/save", first, {"Content-Type": content_type})
+                    self.assertEqual(status, 303)
+                before = pdf.read_bytes() if pdf.exists() else None
+                draft_value = "My manual <draft> & more"
+                upload = b"original uploaded bytes"
+                body, content_type = self._multipart_body(
+                    {**tokens, "text:Name": draft_value, "check:Ready": "on"},
+                    {"portrait_image": ("portrait.png", upload, "image/png")},
+                )
+                status, headers, payload = self._request(server, "POST", "/save", body, {"Content-Type": content_type})
+                self.assertEqual(status, 409)
+                self.assertEqual(headers["Cache-Control"], "no-store")
+                self.assertEqual(pdf.read_bytes() if pdf.exists() else None, before)
+                draft = json.loads(base64.b64decode(re.search(
+                    rb"data:application/json;base64,([^']+)", payload)[1]))
+                self.assertEqual(draft["values"]["text:Name"], [draft_value])
+                self.assertEqual(draft["values"]["check:Ready"], ["on"])
+                self.assertEqual(base64.b64decode(draft["files_base64"]["portrait_image"]), upload)
+                self.assertIn(html.escape(draft_value).encode(), payload)
 
 
 if __name__ == "__main__":

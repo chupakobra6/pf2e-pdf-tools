@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import json
+import secrets
 import html
 import subprocess
 import time
@@ -17,7 +20,7 @@ from threading import RLock
 
 import fitz
 
-from pdf_form_editor import FieldInfo, PdfFormEditor
+from pdf_form_editor import FieldInfo, FileConflict, PdfFormEditor
 
 
 DEFAULT_SCALE = 1.35
@@ -38,6 +41,7 @@ class AppState:
     scale: float
     last_message: str = ""
     document_revision: int = 0
+    session_id: str = field(default_factory=lambda: secrets.token_hex(16))
     lock: RLock = field(default_factory=RLock, repr=False)
 
 
@@ -613,6 +617,8 @@ def render_index(
     message: str,
     scale: float,
     document_revision: int,
+    file_version: str,
+    session_id: str,
 ) -> bytes:
     fields_by_page: dict[int, list[FieldInfo]] = {}
     for field in fields:
@@ -658,6 +664,8 @@ def render_index(
       <form id="editor-form" method="post" action="/save" enctype="multipart/form-data">
         <input type="hidden" name="expected_pdf_path" value="{html.escape(str(pdf_path.resolve()))}">
         <input type="hidden" name="expected_pdf_revision" value="{document_revision}">
+        <input type="hidden" name="expected_file_version" value="{file_version}">
+        <input type="hidden" name="expected_session_id" value="{session_id}">
         <div class="topbar">
           <div>
             <div class="title">PDF Visual Editor</div>
@@ -790,43 +798,17 @@ def build_handler(state: AppState):
                     autosize_mode = state.autosize_mode
 
                     if not current_pdf_path.exists():
-                        state.last_message = self._missing_pdf_message("сохранение")
-                        self._redirect("/choose-pdf")
-                        return
-
-                    if not expected_pdf_path or not expected_revision_raw:
-                        state.last_message = (
-                            "Сохранение отменено: страница редактора устарела. "
-                            "Перезагрузите нужный PDF и попробуйте снова."
-                        )
-                        self._redirect("/")
-                        return
-
-                    try:
-                        expected_path = Path(expected_pdf_path).resolve()
-                    except Exception:
-                        expected_path = None
-                    if expected_path is None or expected_path != current_pdf_path:
-                        state.last_message = (
-                            "Сохранение отменено: форма устарела после переключения PDF. "
-                            "Перезагрузите редактор нужного файла и попробуйте снова."
-                        )
-                        self._redirect("/")
-                        return
-
-                    try:
-                        expected_revision = int(expected_revision_raw)
-                    except ValueError:
-                        expected_revision = -1
-                    if expected_revision != current_revision:
-                        state.last_message = (
-                            "Сохранение отменено: форма устарела. "
-                            "Файл уже был переключён или изменён в другой вкладке."
-                        )
-                        self._redirect("/")
-                        return
+                        raise FileConflict(self._missing_pdf_message("сохранение"))
+                    if form.getfirst("expected_session_id") != state.session_id:
+                        raise FileConflict("Сервер перезапущен или форма устарела. Откройте текущий PDF заново.")
+                    if not expected_pdf_path or Path(expected_pdf_path).resolve() != current_pdf_path:
+                        raise FileConflict("Форма устарела после переключения PDF. Откройте нужный файл заново.")
+                    if expected_revision_raw != str(current_revision):
+                        raise FileConflict("Форма устарела: файл переключён или изменён в другой вкладке.")
 
                     editor = PdfFormEditor(current_pdf_path)
+                    if form.getfirst("expected_file_version") != editor.source_version:
+                        raise FileConflict("PDF изменён вне этой формы. Откройте свежую версию и сравните правки.")
                     started = time.time()
                     fields = editor.list_fields()
                     text_names = sorted({field.name for field in fields if field.field_type == "Text"})
@@ -853,9 +835,12 @@ def build_handler(state: AppState):
                     state.last_message = f"PDF updated successfully in {duration:.2f}s."
             except Exception as exc:
                 print(f"[pdf-web] save failed: {exc}")
-                traceback.print_exc()
+                if not isinstance(exc, (FileConflict, FileNotFoundError)):
+                    traceback.print_exc()
                 with state.lock:
                     state.last_message = f"Save failed: {exc}"
+                self._send_unsaved_form(form, str(exc), HTTPStatus.CONFLICT if isinstance(exc, (FileConflict, FileNotFoundError)) else HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
             finally:
                 if editor is not None:
                     editor.close()
@@ -865,38 +850,54 @@ def build_handler(state: AppState):
         def log_message(self, format: str, *args) -> None:
             return
 
+        def _send_unsaved_form(self, form: ParsedForm, reason: str, status: HTTPStatus) -> None:
+            # Keep the exact submitted values and uploaded bytes in the response,
+            # not in shared server state where another tab could replace them.
+            draft = {"values": form.values, "files_base64": {
+                name: base64.b64encode(data).decode("ascii") for name, data in form.files.items()
+            }}
+            encoded = base64.b64encode(json.dumps(draft, ensure_ascii=False).encode()).decode("ascii")
+            values = "".join(
+                f"<dt>{html.escape(name)}</dt><dd><pre>{html.escape(chr(10).join(items))}</pre></dd>"
+                for name, items in form.values.items() if not name.startswith("expected_")
+            )
+            content = ("<!doctype html><html lang='ru'><meta charset='utf-8'>"
+                "<title>Несохранённые правки PDF</title><h1>Правки не записаны</h1>"
+                f"<p>{html.escape(reason)}</p>"
+                "<p>Ваш ввод сохранён ниже. Скачайте черновик с полями и изображениями, "
+                "затем откройте актуальный файл в новой вкладке и перенесите нужные правки после сравнения. "
+                "Не закрывайте эту страницу до переноса. Отсутствующий флажок в черновике означает снятый флажок.</p>"
+                f"<p><a download='pdf-unsaved-draft.json' href='data:application/json;base64,{encoded}'>"
+                "Скачать весь ввод</a> · <a href='/' target='_blank' rel='noopener'>Открыть актуальный PDF</a></p>"
+                f"<dl>{values}</dl></html>").encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+
         def _send_index(self) -> None:
             with state.lock:
                 pdf_path = state.pdf_path
-                picker_root = state.picker_root
-                last_message = state.last_message
-                scale = state.scale
-                document_revision = state.document_revision
-            if not pdf_path.exists():
-                self._send_picker_for_missing_pdf("открытие редактора")
-                return
-            editor = PdfFormEditor(pdf_path)
-            try:
-                fields = editor.list_fields()
-                image_field_names = editor.button_field_names()
-                default_image_field_name = editor.default_image_field_name()
-            finally:
-                editor.close()
-            print(f"[pdf-web] render index fields={len(fields)}")
-            pages = get_page_specs(pdf_path)
-            content = render_index(
-                pdf_path,
-                picker_root,
-                pages,
-                fields,
-                image_field_names,
-                default_image_field_name,
-                last_message,
-                scale,
-                document_revision,
-            )
+                if not pdf_path.exists():
+                    self._send_picker_for_missing_pdf("открытие редактора")
+                    return
+                editor = PdfFormEditor(pdf_path)
+                try:
+                    pages = [PageSpec(i, page.rect.width, page.rect.height)
+                             for i, page in enumerate(editor.doc)]
+                    content = render_index(
+                        pdf_path, state.picker_root, pages, editor.list_fields(),
+                        editor.button_field_names(), editor.default_image_field_name(),
+                        state.last_message, state.scale, state.document_revision,
+                        editor.source_version, state.session_id,
+                    )
+                finally:
+                    editor.close()
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)

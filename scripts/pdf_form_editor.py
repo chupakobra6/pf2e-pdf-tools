@@ -10,6 +10,11 @@ from pathlib import Path
 
 import fitz
 
+if __package__:
+    from .pdf_file_state import FileConflict, file_version, publish, read_snapshot
+else:
+    from pdf_file_state import FileConflict, file_version, publish, read_snapshot
+
 MIN_FONT_SIZE = 4.0
 MAX_FONT_SIZE = 36.0
 MULTILINE_HEIGHT_THRESHOLD = 28.0
@@ -366,8 +371,10 @@ class FieldInfo:
 
 class PdfFormEditor:
     def __init__(self, path: Path | str):
-        self.path = Path(path)
-        self.doc = fitz.open(self.path)
+        self.path = Path(path).resolve()
+        snapshot = read_snapshot(self.path)
+        self.source_version = snapshot.version
+        self.doc = fitz.open(stream=snapshot.data, filetype="pdf")
         self.pages = [self.doc.load_page(i) for i in range(len(self.doc))]
         self.widgets_by_name: dict[str, list[WidgetRef]] = defaultdict(list)
         self.field_xrefs_by_name: dict[str, list[int]] = defaultdict(list)
@@ -380,43 +387,28 @@ class PdfFormEditor:
         self.doc.close()
 
     def save(self, output_path: Path | str | None = None) -> None:
-        target_path = Path(output_path) if output_path is not None else self.path
-        self.sync_structural_fields_from_widgets()
+        target_path = Path(output_path).resolve() if output_path is not None else self.path
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        expected = {self.path: self.source_version}
         if target_path != self.path:
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            self.doc.save(
-                target_path,
-                garbage=3,
-                deflate=True,
-                encryption=fitz.PDF_ENCRYPT_KEEP,
-            )
-            return
-
-        if self.path.exists() and self.doc.can_save_incrementally():
-            try:
-                self.doc.saveIncr()
-                return
-            except (RuntimeError, FileNotFoundError, fitz.FileDataError):
-                pass
-
+            expected[target_path] = file_version(target_path)
+        self.sync_structural_fields_from_widgets()
         temp_fd, temp_name = tempfile.mkstemp(
-            prefix=f".tmp_autosize_{self.path.stem}_",
-            suffix=".pdf",
-            dir=self.path.parent,
+            prefix=f".tmp_edit_{target_path.stem}_", suffix=".pdf", dir=target_path.parent,
         )
         os.close(temp_fd)
         temp_path = Path(temp_name)
         try:
-            self.doc.save(
-                temp_path,
-                garbage=3,
-                deflate=True,
-                encryption=fitz.PDF_ENCRYPT_KEEP,
-            )
-            os.replace(temp_path, self.path)
+            self.doc.save(temp_path, garbage=3, deflate=True, encryption=fitz.PDF_ENCRYPT_KEEP)
+            with fitz.open(temp_path) as saved:
+                for page in saved:
+                    list(page.widgets() or ())
+            # The in-memory document remains available to the caller after conflict.
+            published_version = publish(temp_path, target_path, expected)
+            if target_path == self.path:
+                self.source_version = published_version
         finally:
-            if temp_path.exists():
-                temp_path.unlink()
+            temp_path.unlink(missing_ok=True)
 
     def _index_fields(self) -> None:
         self.widgets_by_name.clear()

@@ -14,6 +14,11 @@ from typing import Any
 
 import fitz
 
+if __package__:
+    from .pdf_file_state import FileConflict, file_version, publish, read_snapshot
+else:
+    from pdf_file_state import FileConflict, file_version, publish, read_snapshot
+
 
 DELIVERY_DPI = 300
 JPEG_QUALITY = 92
@@ -89,12 +94,14 @@ def prepare_for_apple(source: Path, output_dir: Path | None = None) -> dict[str,
     if target == source:
         raise DeliveryError("Delivery output must not overwrite the editable source PDF")
 
-    source_hash = sha256(source)
+    snapshot = read_snapshot(source)
+    source_hash = hashlib.sha256(snapshot.data).hexdigest()
+    target_version = file_version(target)
     images: list[bytes] = []
     page_results: list[dict[str, Any]] = []
     temporary: Path | None = None
     try:
-        with fitz.open(source) as original, fitz.open() as delivery:
+        with fitz.open(stream=snapshot.data, filetype="pdf") as original, fitz.open() as delivery:
             if original.is_encrypted or original.page_count == 0:
                 raise DeliveryError(f"Input PDF is encrypted or empty: {source}")
             dimensions = [tuple(page.rect) for page in original]
@@ -159,21 +166,23 @@ def prepare_for_apple(source: Path, output_dir: Path | None = None) -> dict[str,
             delivery.save(temporary, garbage=4, deflate=True, use_objstms=0)
 
         _validate_image_only_pdf(temporary, dimensions, images)
-        os.replace(temporary, target)
+        output_hash = sha256(temporary)
+        output_bytes = temporary.stat().st_size
+        publish(temporary, target, {source: snapshot.version, target: target_version})
         temporary = None
+    except FileConflict as exc:
+        raise DeliveryError(str(exc)) from exc
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
 
-    if sha256(source) != source_hash:
-        raise DeliveryError(f"Editable source PDF changed during export: {source}")
     return {
         "source": str(source),
         "output": str(target),
         "source_sha256": source_hash,
-        "output_sha256": sha256(target),
-        "source_bytes": source.stat().st_size,
-        "output_bytes": target.stat().st_size,
+        "output_sha256": output_hash,
+        "source_bytes": len(snapshot.data),
+        "output_bytes": output_bytes,
         "dpi": DELIVERY_DPI,
         "jpeg_quality": JPEG_QUALITY,
         "fonts": 0,
